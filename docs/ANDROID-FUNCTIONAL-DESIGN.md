@@ -318,16 +318,27 @@ UI 从「勾选仅预演 + 导入」改成「预览差异 → 确认写入 N 条
 「⚠ 1 条会覆盖本地已有字段」→ 条目区显示「覆盖 TESTPASTE / 功效」「新增 NEWHERB」→「确认写入 2 条」→
 矩阵：实体 8→9、卡片 91→93、rev 17→19，TESTPASTE 的「功效」已变 `newfx`。崩溃 0。
 
-**A3 未做**：OCR 草稿化（ML Kit 现在只把整段文本回填到导入框，还没接 `parsePaste` 出草稿）、
-批量粘贴多味药（一次只建一条，多味药之间的分隔语法还没定）。
+**批量粘贴（空行分隔）**：`parsePasteMany` 按**空行**切块（不用 `---`：笔记里两条之间天然有空行，
+而 `---` 可能出现在正文里，误切比漏切更难发现）。`createEntities` 批量新建**逐条独立**：
+一条重名只跳过那一条，不会让整批失败 —— 20 味药因为第 3 条重名全部回滚，用户会失去所有已确认的内容。
 
-**实现状态（A3）**：`parsePaste`（文本→字段）/ `checkDuplicate`（同名·同义名·近似名）/ `previewImport`（导入逐条差异）已实现，均有单测 + 真机回执。
+**OCR 草稿化**：ML Kit 识别出的自由文本**不是 CSV**，走「导入」会报「表头缺少 id 列」。
+「导入数据」面板新增「按一条药新建」：把那段文字带进粘贴填写框 → 解析 → 「新建这条」→ 直接落库。
+
+**真机回执（V2148A）**：矩阵页「批量粘贴」→ 两个空行分隔的块 → 「识别到 2 条」（BP1/BP2 各 2 项）→
+「全部新建 2 条」→ 「✓ 已新建《BP1》/《BP2》」→ 矩阵实体 9→11、卡片 95→97、rev 19→21。
+再试一批（BP1 已存在 + BP4 新）→ 「✓ 已新建《BP4》」「· 跳过：已存在《BP1》」，逐条独立成立。
+同步页输入自由文本 →「按一条药新建」→ 预填 → 「新建这条」→ 「✓ 已新建《BP5》」。崩溃 0。
+
+**A3 完成**（粘贴填充 / 查重 / 导入差异预览 / 批量粘贴 / OCR 草稿）。
+
+**实现状态（A3 已完成）**：`parsePaste` / `parsePasteMany` / `createEntity`+`createEntities` / `checkDuplicate` / `previewImport`，均有单测 + 真机回执。
 
 **实现状态（A2）**：`quizPlan`（按 review.json 出题，含本轮张数）/ `quizQueue`（显式参数版）/
 `reviewConfig` / `setReviewConfig` / `suggestGrade` / `weakCards` 已接入复习页；`review()` 复习后自动派生
 掌握度写回实体（手工覆盖 30 天内生效），回执里带「还有 N 张卡没学过」。**实现状态（A1）**：`createEntity` / `deleteEntity` / `restoreEntity` / `listDeleted` / `entityHistory` / `undoEdit` / `entityTemplate`，有单测 + 真机回执。
 
-**待做**：`search` / `setCredential`（A4）、OCR 草稿化（A3 余项）。FFI 共 **36 个导出**；`state()` 带 `kind` 与 `recycle`。
+**待做**：`search` / `setCredential`（A4）。FFI 共 **38 个导出**；`state()` 带 `kind` 与 `recycle`。
 
 **兼容性**：只增不改。`view()` 已加 `_id`；`entityDetail` / `editEntity` 保持。
 

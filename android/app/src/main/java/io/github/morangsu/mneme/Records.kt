@@ -286,12 +286,12 @@ fun CreateEntityDialog(
     if (pasteOpen) {
         PasteFillDialog(
             kind = kind,
-            onDismiss = { pasteOpen = false },
-            onApply = { values ->
+            applyToForm = { values ->
                 // 只覆盖认出来的字段，其余保持用户已填的内容
                 values.forEach { (k, v) -> edits[k] = v }
                 pasteOpen = false
             },
+            onDismiss = { pasteOpen = false },
         )
     }
 }

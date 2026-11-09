@@ -7,12 +7,14 @@ package io.github.morangsu.mneme.ffi
 import io.github.morangsu.mneme.ffi.answer as ffiAnswer
 import io.github.morangsu.mneme.ffi.checkDuplicate as ffiCheckDuplicate
 import io.github.morangsu.mneme.ffi.configureSync as ffiConfigureSync
+import io.github.morangsu.mneme.ffi.createEntities as ffiCreateEntities
 import io.github.morangsu.mneme.ffi.createEntity as ffiCreateEntity
 import io.github.morangsu.mneme.ffi.deleteEntity as ffiDeleteEntity
 import io.github.morangsu.mneme.ffi.entityHistory as ffiEntityHistory
 import io.github.morangsu.mneme.ffi.entityTemplate as ffiEntityTemplate
 import io.github.morangsu.mneme.ffi.listDeleted as ffiListDeleted
 import io.github.morangsu.mneme.ffi.parsePaste as ffiParsePaste
+import io.github.morangsu.mneme.ffi.parsePasteMany as ffiParsePasteMany
 import io.github.morangsu.mneme.ffi.previewImport as ffiPreviewImport
 import io.github.morangsu.mneme.ffi.restoreEntity as ffiRestoreEntity
 import io.github.morangsu.mneme.ffi.undoEdit as ffiUndoEdit
@@ -97,6 +99,13 @@ object MnemeApi {
     /** 导入预览：逐条差异，只读。 */
     fun previewImport(content: String, filename: String): String =
         ffiPreviewImport(content, filename)
+
+    /** 批量粘贴解析（空行分隔多条）。 */
+    fun parsePasteMany(text: String, kind: String): String = ffiParsePasteMany(text, kind)
+
+    /** 批量新建：逐条独立，返回 created/skipped/failed。 */
+    fun createEntities(kind: String, itemsJson: String): String =
+        ffiCreateEntities(kind, itemsJson)
 
     /** 查重：同名 / 同义名 / 近似名；excludeId 传自己时不会「和自己重复」。 */
     fun checkDuplicate(kind: String, fieldsJson: String, excludeId: String): String =

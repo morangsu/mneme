@@ -11,7 +11,7 @@ use mneme_codec::{self as codec, Format, ImportOptions, ImportStrategy};
 use mneme_core::{
     DomainSchema, Entity, FieldKind, ReviewConfig, ReviewEvent, TermTable, Value, daily_queue,
     find_duplicates, fold_events, generate_choices, judge as judge_answer, mastery_label_ext, now_ms,
-    parse_paste as core_parse_paste,
+    parse_paste as core_parse_paste, parse_paste_batch as core_parse_paste_batch,
     suggest_grade as core_suggest_grade, weak_cards as core_weak_cards,
 };
 use mneme_store::{Op, Store};
@@ -886,6 +886,46 @@ pub fn parse_paste(text: String, kind: String) -> String {
     })
 }
 
+/// 批量粘贴：**空行分隔**多条，逐条返回解析结果。
+///
+/// 与 `parsePaste` 同构，只是外面多一层「块」。单条时 blocks 长度为 1，
+/// UI 可以把两种模式统一成「有 N 块」来处理。
+#[uniffi::export]
+pub fn parse_paste_many(text: String, kind: String) -> String {
+    call(|a| {
+        let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
+        let batch = core_parse_paste_batch(&text, &schema, &kind);
+        let blocks: Vec<Json> = batch
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                json!({
+                    "index": i,
+                    "fields": p.fields,
+                    "hits": p.hits.iter().map(|h| json!({
+                        "key": h.key, "label": h.label, "value": h.value, "line": h.line,
+                    })).collect::<Vec<_>>(),
+                    "unknown": p.unknown,
+                    "conflicts": p.conflicts,
+                    "matched": p.fields.len(),
+                })
+            })
+            .collect();
+        // primary 一并下发：UI 要按主键取「这条叫什么」，不能假设一定叫 name
+        let primary = schema
+            .entity_def(&kind)
+            .and_then(|d| d.primary.clone())
+            .unwrap_or_else(|| "name".into());
+        json!({
+            "blocks": blocks,
+            "count": batch.blocks.len(),
+            "skipped_blocks": batch.skipped_blocks,
+            "primary": primary,
+        })
+    })
+}
+
 /// 查重：准备新建/改名时，看库里有没有「其实是同一味药」的条目。
 ///
 /// 返回同名 / 同义名 / 近似名三类候选（已删除的、被替代的旧版不算）。
@@ -949,9 +989,6 @@ pub fn entity_template(kind: String) -> String {
 pub fn create_entity(kind: String, fields_json: String, id_hint: String) -> String {
     call(|a| {
         let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
-        let Some(def) = schema.entity_def(&kind).cloned() else {
-            return err(format!("未知实体类型：{kind}"));
-        };
         let raw: BTreeMap<String, Json> = match serde_json::from_str(&fields_json) {
             Ok(v) => v,
             Err(e) => return err(format!("fieldsJson 解析失败: {e}")),
@@ -959,86 +996,169 @@ pub fn create_entity(kind: String, fields_json: String, id_hint: String) -> Stri
         if raw.is_empty() {
             return err("没有要写入的字段");
         }
-
-        let now = now_ms();
-        let device = a.store.device().to_string();
-        let mut entity = Entity::new("", kind.clone(), &device, now);
-        let mut bad: Vec<String> = Vec::new();
-        for (key, v) in &raw {
-            let Some(f) = def.fields.iter().find(|f| f.key == *key) else {
-                return err(format!("未知字段：{key}"));
-            };
-            let Some(val) = coerce(f.kind, v) else {
-                bad.push(format!("{}（需要 {}）", f.key, kind_name(f.kind)));
-                continue;
-            };
-            entity.fields.insert(key.clone(), val);
+        match create_one(a, &schema, &kind, &raw, id_hint.trim()) {
+            Ok(c) => json!({
+                "ok": true, "id": c.id, "rev": c.rev, "name": c.name,
+                "superseded": c.superseded,
+            }),
+            Err(CreateErr::Duplicate { message, id, deleted }) => json!({
+                "error": message, "existing_id": id, "deleted": deleted,
+            }),
+            Err(CreateErr::Other(e)) => err(e),
         }
-        if !bad.is_empty() {
-            return err(format!("以下字段的值类型不对：{}", bad.join("；")));
-        }
+    })
+}
 
-        let primary = def.primary.clone().unwrap_or_else(|| "name".into());
-        let name = entity.display_of(&primary).trim().to_string();
-        if name.is_empty() {
-            let label = schema
-                .field(&kind, &primary)
-                .map(|f| if f.label.is_empty() { f.key.clone() } else { f.label.clone() })
-                .unwrap_or_else(|| primary.clone());
-            return err(format!("「{label}」不能为空"));
-        }
+struct Created {
+    id: String,
+    rev: u64,
+    name: String,
+    superseded: String,
+}
 
-        let id = if id_hint.trim().is_empty() {
-            name.clone()
-        } else {
-            id_hint.trim().to_string()
+enum CreateErr {
+    /// 重名/墓碑：UI 要据此给「去编辑」或「换名字」的出口，所以单独一类
+    Duplicate {
+        message: String,
+        id: String,
+        deleted: bool,
+    },
+    Other(String),
+}
+
+/// 新建一条实体的实际逻辑。抽出来是为了批量新建能复用同一套校验，
+/// 不至于「单条能建、批量建出另一套规则」。
+fn create_one(
+    a: &App,
+    schema: &DomainSchema,
+    kind: &str,
+    raw: &BTreeMap<String, Json>,
+    id_hint: &str,
+) -> std::result::Result<Created, CreateErr> {
+    let Some(def) = schema.entity_def(kind).cloned() else {
+        return Err(CreateErr::Other(format!("未知实体类型：{kind}")));
+    };
+    let now = now_ms();
+    let device = a.store.device().to_string();
+    let mut entity = Entity::new("", kind.to_string(), &device, now);
+    let mut bad: Vec<String> = Vec::new();
+    for (key, v) in raw {
+        let Some(f) = def.fields.iter().find(|f| f.key == *key) else {
+            return Err(CreateErr::Other(format!("未知字段：{key}")));
         };
-        if let Some(existing) = a.store.read(|m| m.entities.get(&id).cloned()) {
-            return json!({
-                "error": if existing.deleted {
-                    format!("《{name}》在回收站里，先恢复或换个名字")
-                } else {
-                    format!("已存在《{name}》")
-                },
-                "existing_id": id,
-                "deleted": existing.deleted,
-            });
-        }
+        let Some(val) = coerce(f.kind, v) else {
+            bad.push(format!("{}（需要 {}）", f.key, kind_name(f.kind)));
+            continue;
+        };
+        entity.fields.insert(key.clone(), val);
+    }
+    if !bad.is_empty() {
+        return Err(CreateErr::Other(format!(
+            "以下字段的值类型不对：{}",
+            bad.join("；")
+        )));
+    }
 
-        // 「复制为新」：除了在新条目上写 supersedes，还要给旧条目盖 superseded_by，
-        // 否则视图无法只靠新条目的字段把旧版隐藏掉（过滤是逐行判定）。
-        let supersedes = entity.display_of("supersedes").trim().to_string();
-        let mut ops: Vec<Op> = Vec::new();
-        let base_rev = a.store.stats().rev;
-        if !supersedes.is_empty() {
-            match a.store.read(|m| m.entities.get(&supersedes).cloned()) {
-                Some(mut old) => {
-                    old.set("superseded_by", Value::Text(id.clone()), now);
-                    old.rev = base_rev + 1;
-                    old.updated_at = now;
-                    old.device = device.clone();
-                    ops.push(Op::UpsertEntity { entity: old });
-                }
-                None => {
-                    // 指了一条不存在的 id：拒绝，别写出悬空引用
-                    return err(format!("要替代的条目不存在：{supersedes}"));
-                }
+    let primary = def.primary.clone().unwrap_or_else(|| "name".into());
+    let name = entity.display_of(&primary).trim().to_string();
+    if name.is_empty() {
+        let label = schema
+            .field(kind, &primary)
+            .map(|f| if f.label.is_empty() { f.key.clone() } else { f.label.clone() })
+            .unwrap_or_else(|| primary.clone());
+        return Err(CreateErr::Other(format!("「{label}」不能为空")));
+    }
+
+    let id = if id_hint.trim().is_empty() {
+        name.clone()
+    } else {
+        id_hint.trim().to_string()
+    };
+    if let Some(existing) = a.store.read(|m| m.entities.get(&id).cloned()) {
+        return Err(CreateErr::Duplicate {
+            message: if existing.deleted {
+                format!("《{name}》在回收站里，先恢复或换个名字")
+            } else {
+                format!("已存在《{name}》")
+            },
+            id,
+            deleted: existing.deleted,
+        });
+    }
+
+    let supersedes = entity.display_of("supersedes").trim().to_string();
+    let mut ops: Vec<Op> = Vec::new();
+    let base_rev = a.store.stats().rev;
+    if !supersedes.is_empty() {
+        match a.store.read(|m| m.entities.get(&supersedes).cloned()) {
+            Some(mut old) => {
+                old.set("superseded_by", Value::Text(id.clone()), now);
+                old.rev = base_rev + 1;
+                old.updated_at = now;
+                old.device = device.clone();
+                ops.push(Op::UpsertEntity { entity: old });
+            }
+            None => {
+                return Err(CreateErr::Other(format!("要替代的条目不存在：{supersedes}")));
             }
         }
+    }
 
-        entity.id = id.clone();
-        entity.rev = base_rev + ops.len() as u64 + 1;
-        ops.push(Op::UpsertEntity { entity: entity.clone() });
-        match a.store.mutate(&ops) {
-            Ok(_) => json!({
-                "ok": true,
-                "id": entity.id,
-                "rev": entity.rev,
-                "name": name,
-                "superseded": supersedes,
-            }),
-            Err(e) => err(e),
+    entity.id = id.clone();
+    entity.rev = base_rev + ops.len() as u64 + 1;
+    ops.push(Op::UpsertEntity { entity: entity.clone() });
+    match a.store.mutate(&ops) {
+        Ok(_) => Ok(Created {
+            id: entity.id,
+            rev: entity.rev,
+            name,
+            superseded: supersedes,
+        }),
+        Err(e) => Err(CreateErr::Other(e.to_string())),
+    }
+}
+
+/// 批量新建（粘贴多条、OCR 一段里有多味药）。
+///
+/// **逐条独立**：一条失败不影响其它条 —— 批量里 20 味药因为第 3 条重名就整批失败，
+/// 用户会失去所有已确认的内容。重名与类型错误分别归类返回，UI 能逐条说清原因。
+#[uniffi::export]
+pub fn create_entities(kind: String, items_json: String) -> String {
+    call(|a| {
+        let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
+        #[derive(serde::Deserialize)]
+        struct Item {
+            #[serde(default)]
+            fields: BTreeMap<String, Json>,
+            #[serde(default)]
+            id_hint: String,
         }
+        let items: Vec<Item> = match serde_json::from_str(&items_json) {
+            Ok(v) => v,
+            Err(e) => return err(format!("itemsJson 解析失败: {e}")),
+        };
+        if items.is_empty() {
+            return err("没有要新建的条目");
+        }
+        let mut created: Vec<Json> = Vec::new();
+        let mut skipped: Vec<Json> = Vec::new();
+        let mut failed: Vec<Json> = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            match create_one(a, &schema, &kind, &item.fields, item.id_hint.trim()) {
+                Ok(c) => created.push(json!({
+                    "index": index, "id": c.id, "rev": c.rev, "name": c.name,
+                })),
+                Err(CreateErr::Duplicate { message, id, deleted }) => skipped.push(json!({
+                    "index": index, "name": id, "reason": message, "existing_id": id,
+                    "deleted": deleted,
+                })),
+                Err(CreateErr::Other(e)) => failed.push(json!({ "index": index, "error": e })),
+            }
+        }
+        json!({
+            "ok": true,
+            "created": created, "skipped": skipped, "failed": failed,
+        })
     })
 }
 
@@ -1642,6 +1762,29 @@ mod tests {
         let before_rev = state();
         let _ = preview_import(csv.into(), "x.csv".into());
         assert_eq!(before_rev, state(), "预览不能写库");
+
+        // ---- A3：批量粘贴（空行分隔）+ 批量新建（逐条独立） ----
+        let many: Json = serde_json::from_str(&parse_paste_many(
+            "name:A药\neffects:功效一\n\nname:B药\neffects:功效二".into(),
+            "herb".into(),
+        ))
+        .unwrap();
+        assert_eq!(many["count"].as_u64(), Some(2), "{many}");
+        assert_eq!(many["blocks"][1]["fields"]["name"], "B药", "{many}");
+
+        let batch = create_entities(
+            "herb".into(),
+            r#"[{"fields":{"name":"A药","effects":"功效一"}},
+                {"fields":{"name":"测试药","effects":"x"}},
+                {"fields":{"name":"B药"}}]"#
+                .into(),
+        );
+        let bj: Json = serde_json::from_str(&batch).unwrap();
+        assert_eq!(bj["created"].as_array().unwrap().len(), 2, "{batch}");
+        // 「测试药」已存在 → 跳过而不是整批失败
+        assert_eq!(bj["skipped"].as_array().unwrap().len(), 1, "{batch}");
+        assert!(bj["skipped"][0]["reason"].as_str().unwrap().contains("已存在"), "{batch}");
+        assert!(entity_detail("A药".into()).contains("功效一"), "批量里第一条要真的落库");
 
         let _ = fs::remove_dir_all(&root);
     }

@@ -55,6 +55,8 @@ object MnemeApiStub {
         "parsePaste" -> "{\"fields\":{\"name\":\"示例\"},\"hits\":[],\"unknown\":[],\"conflicts\":[],\"matched\":1}"
         "checkDuplicate" -> "{\"items\":[]}"
         "previewImport" -> "{\"format\":\"csv\",\"total\":0,\"create\":0,\"update\":0,\"same\":0,\"items\":[],\"warnings\":[]}"
+        "parsePasteMany" -> "{\"blocks\":[],\"count\":0,\"skipped_blocks\":0,\"primary\":\"name\"}"
+        "createEntities" -> "{\"ok\":true,\"created\":[],\"skipped\":[],\"failed\":[]}"
         "editEntity" -> JSONObject()
             .put("ok", true)
             .put("id", args["entityId"] ?: "")
@@ -281,6 +283,12 @@ object MnemeBridge {
                 "parsePaste" -> MnemeApi.parsePaste(
                     args["text"] as String, args["kind"] as String
                 )
+                "parsePasteMany" -> MnemeApi.parsePasteMany(
+                    args["text"] as String, args["kind"] as String
+                )
+                "createEntities" -> MnemeApi.createEntities(
+                    args["kind"] as String, args["itemsJson"] as String
+                )
                 "previewImport" -> MnemeApi.previewImport(
                     args["content"] as String, args["filename"] as String
                 )
@@ -414,6 +422,12 @@ object Api {
 
     suspend fun parsePaste(text: String, kind: String): JSONObject =
         call("parsePaste", mapOf("text" to text, "kind" to kind))
+
+    suspend fun parsePasteMany(text: String, kind: String): JSONObject =
+        call("parsePasteMany", mapOf("text" to text, "kind" to kind))
+
+    suspend fun createEntities(kind: String, itemsJson: String): JSONObject =
+        call("createEntities", mapOf("kind" to kind, "itemsJson" to itemsJson))
 
     suspend fun previewImport(content: String, filename: String = "paste.txt"): JSONObject =
         call("previewImport", mapOf("content" to content, "filename" to filename))

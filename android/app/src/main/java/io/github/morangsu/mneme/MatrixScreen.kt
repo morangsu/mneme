@@ -55,6 +55,7 @@ fun MatrixScreen() {
     // 正在编辑的实体 id；非 null 时弹出编辑面板
     var editing by remember { mutableStateOf<String?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var batchPaste by remember { mutableStateOf(false) }
     var recycle by remember { mutableStateOf(false) }
     // 实体类型由 Rust 侧 state 返回，避免在这里硬编码 "herb"
     var kind by remember { mutableStateOf("herb") }
@@ -114,6 +115,7 @@ fun MatrixScreen() {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     GhostButton("＋ 新建", onClick = { creating = true })
+                    GhostButton("批量粘贴", onClick = { batchPaste = true })
                     GhostButton(
                         "回收站 (${s.optInt("recycle")})",
                         onClick = { recycle = true },
@@ -203,6 +205,13 @@ fun MatrixScreen() {
                 creating = false
                 reload++
             },
+        )
+    }
+    if (batchPaste) {
+        PasteFillDialog(
+            kind = kind,
+            afterCreate = { reload++ },
+            onDismiss = { batchPaste = false },
         )
     }
     if (recycle) {

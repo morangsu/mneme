@@ -783,6 +783,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -803,6 +807,8 @@ internal interface IntegrityCheckingUniffiLib : Library {
 fun uniffi_mneme_ffi_checksum_func_check_duplicate(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_configure_sync(
+): Short
+fun uniffi_mneme_ffi_checksum_func_create_entities(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_create_entity(
 ): Short
@@ -827,6 +833,8 @@ fun uniffi_mneme_ffi_checksum_func_list_deleted(
 fun uniffi_mneme_ffi_checksum_func_open_database(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_parse_paste(
+): Short
+fun uniffi_mneme_ffi_checksum_func_parse_paste_many(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_preview_import(
 ): Short
@@ -921,6 +929,8 @@ fun uniffi_mneme_ffi_fn_func_check_duplicate(`kind`: RustBuffer.ByValue,`fieldsJ
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_configure_sync(`configJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_create_entities(`kind`: RustBuffer.ByValue,`itemsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_create_entity(`kind`: RustBuffer.ByValue,`fieldsJson`: RustBuffer.ByValue,`idHint`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_delete_entity(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -944,6 +954,8 @@ fun uniffi_mneme_ffi_fn_func_list_deleted(uniffi_out_err: UniffiRustCallStatus,
 fun uniffi_mneme_ffi_fn_func_open_database(`path`: RustBuffer.ByValue,`device`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_parse_paste(`text`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_parse_paste_many(`text`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_preview_import(`content`: RustBuffer.ByValue,`filename`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1122,6 +1134,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_configure_sync() != 38613.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mneme_ffi_checksum_func_create_entities() != 19852.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mneme_ffi_checksum_func_create_entity() != 8125.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1156,6 +1171,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_parse_paste() != 38243.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_parse_paste_many() != 17380.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_preview_import() != 63842.toShort()) {
@@ -1510,6 +1528,21 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     
 
         /**
+         * 批量新建（粘贴多条、OCR 一段里有多味药）。
+         *
+         * **逐条独立**：一条失败不影响其它条 —— 批量里 20 味药因为第 3 条重名就整批失败，
+         * 用户会失去所有已确认的内容。重名与类型错误分别归类返回，UI 能逐条说清原因。
+         */ fun `createEntities`(`kind`: kotlin.String, `itemsJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_create_entities(
+        FfiConverterString.lower(`kind`),FfiConverterString.lower(`itemsJson`),_status)
+}
+    )
+    }
+    
+
+        /**
          * 新建一条实体。`immutable` 字段**允许**在这里填写 —— 这正是「教材抄错一个字」的合法出路：
          * 不改原条目，另建一条并标 `supersedes`。
          *
@@ -1645,6 +1678,21 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_parse_paste(
+        FfiConverterString.lower(`text`),FfiConverterString.lower(`kind`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 批量粘贴：**空行分隔**多条，逐条返回解析结果。
+         *
+         * 与 `parsePaste` 同构，只是外面多一层「块」。单条时 blocks 长度为 1，
+         * UI 可以把两种模式统一成「有 N 块」来处理。
+         */ fun `parsePasteMany`(`text`: kotlin.String, `kind`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_parse_paste_many(
         FfiConverterString.lower(`text`),FfiConverterString.lower(`kind`),_status)
 }
     )

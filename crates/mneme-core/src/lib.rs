@@ -29,7 +29,10 @@ pub use entity::{Entity, Group, ReviewEvent, SourceAnchor, TermAlias, Value};
 pub use error::{Error, Result};
 pub use index::{InvertedIndex, Scored};
 pub use merge::{Diff, EntityChange, FieldChange, MergePolicy, diff_entities, merge_events, three_way};
-pub use paste::{Duplicate, PasteHit, PasteParse, find_duplicates, parse_paste};
+pub use paste::{
+    Duplicate, PasteBatch, PasteHit, PasteParse, find_duplicates, parse_paste,
+    parse_paste_batch,
+};
 pub use schema::{DirectionDef, DomainSchema, EntityDef, FieldDef, FieldKind, FilterOp, TermAliasDef, ViewDef, ViewFilter};
 pub use srs::{
     DailyQueue, FSRS5_DEFAULT_W, FsrsScheduler, ReviewConfig, Scheduler, Sm2Scheduler, SrsState,

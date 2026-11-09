@@ -1,7 +1,7 @@
 use mneme_core::{
     DomainSchema, Entity, InvertedIndex, MergePolicy, ReviewEvent, Sm2Scheduler, SrsState, TermTable,
     Value, daily_queue, diff_entities, fold_events, generate_cards, mastery_label,
-    mastery_label_ext, merge_events, normalize, parse_paste, find_duplicates,
+    mastery_label_ext, merge_events, normalize, parse_paste, parse_paste_batch, find_duplicates,
     schema::TermAliasDef, suggest_grade, weak_cards, three_way,
 };
 
@@ -478,4 +478,34 @@ fn duplicates_cover_name_synonym_and_similarity() {
     // 排除自己（编辑现有条目时不能提示「和自己重复」）
     let d4 = find_duplicates(&schema, &entities, "herb", &f, Some("麻黄"));
     assert!(d4.is_empty(), "{d4:?}");
+}
+
+#[test]
+fn paste_batch_splits_on_blank_lines() {
+    let text = "药名：麻黄\n功效：发汗解表\n\n药名：桂枝\n功效：解肌\n\n\n药名：薄荷\n功效：疏散风热";
+    let b = parse_paste_batch(text, &materia(), "herb");
+    assert_eq!(b.blocks.len(), 3, "{:?}", b.blocks);
+    assert_eq!(b.blocks[0].fields.get("name").map(String::as_str), Some("麻黄"));
+    assert_eq!(b.blocks[1].fields.get("name").map(String::as_str), Some("桂枝"));
+    assert_eq!(b.blocks[2].fields.get("name").map(String::as_str), Some("薄荷"));
+    // 连续空行不该多切出一块
+    assert_eq!(b.skipped_blocks, 0);
+}
+
+#[test]
+fn paste_batch_keeps_junk_block_visible() {
+    // 一整块都认不出来时不能悄悄丢掉 —— 用户得看见才能改
+    let text = "药名：麻黄\n\n完全没有标签的一段话";
+    let b = parse_paste_batch(text, &materia(), "herb");
+    assert_eq!(b.blocks.len(), 2);
+    assert!(b.blocks[1].fields.is_empty());
+    assert_eq!(b.blocks[1].unknown.len(), 1);
+}
+
+#[test]
+fn paste_batch_single_block_works() {
+    let b = parse_paste_batch("药名：麻黄\n功效：发汗", &materia(), "herb");
+    assert_eq!(b.blocks.len(), 1);
+    assert_eq!(b.blocks[0].fields.get("name").map(String::as_str), Some("麻黄"));
+    assert_eq!(b.skipped_blocks, 0);
 }

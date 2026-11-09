@@ -32,6 +32,9 @@ fun SyncScreen(onGoConflict: () -> Unit) {
     var exportResult by remember { mutableStateOf<JSONObject?>(null) }
     var importText by remember { mutableStateOf("") }
     var importPreview by remember { mutableStateOf<JSONObject?>(null) }
+    // OCR / 粘贴的文字如果要「当一条药」，得知道当前领域的主实体类型
+    var domainKind by remember { mutableStateOf("herb") }
+    var draftOpen by remember { mutableStateOf(false) }
     var exportFormat by remember { mutableStateOf("bundle") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -46,6 +49,13 @@ fun SyncScreen(onGoConflict: () -> Unit) {
                 targets = (0 until arr.length()).map { arr.optString(it) }
                 if (target !in targets) target = targets.first()
             }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val st = Api.state()
+        if (st.err() == null) {
+            domainKind = st.optString("kind").ifBlank { "herb" }
         }
     }
 
@@ -184,6 +194,11 @@ fun SyncScreen(onGoConflict: () -> Unit) {
                         importResult = null
                     })
                 }
+                // 自由文本（OCR 识别结果、教材段落）本来就不是 CSV，
+                // 走「导入」会报「表头缺少 id 列」；这里直接变成新建草稿。
+                GhostButton("按一条药新建", enabled = !busy && importText.isNotBlank(), onClick = {
+                    draftOpen = true
+                })
             }
 
             importPreview?.let { pv ->
@@ -288,5 +303,18 @@ fun SyncScreen(onGoConflict: () -> Unit) {
         }
 
         Spacer(Modifier.height(16.dp))
+    }
+
+    if (draftOpen) {
+        PasteFillDialog(
+            kind = domainKind,
+            initialText = importText,
+            afterCreate = {
+                // 建完清掉输入框，避免重复建同一条
+                importText = ""
+                importPreview = null
+            },
+            onDismiss = { draftOpen = false },
+        )
     }
 }

@@ -167,6 +167,55 @@ pub fn parse_paste(text: &str, schema: &DomainSchema, kind: &str) -> PasteParse 
     out
 }
 
+/// 一批粘贴结果：**空行分隔**多条。
+///
+/// 为什么选空行而不是 `---` 之类的分隔符：
+/// 从笔记/Word 复制过来时，两条之间天然就有空行；而 `---`、`===`
+/// 可能出现在正文里（比如原文自带的分隔线），误切比漏切更难发现。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PasteBatch {
+    pub blocks: Vec<PasteParse>,
+    /// 空块数量（连续空行会被合并，这里只统计真正的空段）
+    pub skipped_blocks: usize,
+}
+
+impl PasteBatch {
+    pub fn is_empty(&self) -> bool {
+        self.blocks.iter().all(|b| b.fields.is_empty())
+    }
+}
+
+pub fn parse_paste_batch(text: &str, schema: &DomainSchema, kind: &str) -> PasteBatch {
+    let mut out = PasteBatch::default();
+    let mut buf: Vec<&str> = Vec::new();
+    let mut skipped = 0usize;
+
+    let mut flush = |buf: &mut Vec<&str>, out: &mut PasteBatch| {
+        if buf.is_empty() {
+            return;
+        }
+        let block_text = buf.join("\n");
+        buf.clear();
+        let parsed = parse_paste(&block_text, schema, kind);
+        if parsed.fields.is_empty() && parsed.unknown.is_empty() {
+            skipped += 1;
+        } else {
+            out.blocks.push(parsed);
+        }
+    };
+
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            flush(&mut buf, &mut out);
+        } else {
+            buf.push(line);
+        }
+    }
+    flush(&mut buf, &mut out);
+    out.skipped_blocks = skipped;
+    out
+}
+
 /// 可能是同一条实体的候选项。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Duplicate {
