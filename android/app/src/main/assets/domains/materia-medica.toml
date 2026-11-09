@@ -122,10 +122,18 @@ label = "我的笔记"
 kind = "text"
 weight = 0.2
 
-# 「替代了哪一条」：原样字段抄错时，新建修订版并指回旧条目，旧条目自动隐藏
+# 「替代了哪一条」：新建修订版时写在**新条目**上，指回旧条目
 [[entities.fields]]
 key = "supersedes"
 label = "替代自"
+kind = "text"
+weight = 0.2
+
+# 反向标记：写在**旧条目**上，指向替代它的新条目。视图靠它隐藏旧版
+# （只查新条目的 supersedes 做不到"隐藏旧的"，因为过滤是逐行判定）
+[[entities.fields]]
+key = "superseded_by"
+label = "已被替代为"
 kind = "text"
 weight = 0.2
 
@@ -193,7 +201,7 @@ label = "药群矩阵"
 columns = ["name", "effects", "features", "indications"]
 group_by = "group_name"
 # 被替代的旧条目不在主视图出现（防止修订版和旧版同时看到、练到）
-filter = { field = "supersedes", op = "eq", value = "" }
+filter = { field = "superseded_by", op = "eq", value = "" }
 
 [[views]]
 id = "danger"
@@ -209,8 +217,8 @@ filter = { field = "mastery", op = "ne", value = "熟练" }
 [[views]]
 id = "superseded"
 label = "已被替代"
-columns = ["name", "supersedes", "nature", "dosage"]
-filter = { field = "supersedes", op = "ne", value = "" }
+columns = ["name", "superseded_by", "nature", "dosage"]
+filter = { field = "superseded_by", op = "ne", value = "" }
 
 [[views]]
 id = "synonyms"

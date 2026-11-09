@@ -246,12 +246,13 @@ fun EntityEditorDialog(
                     }
                 }
 
-                // 撤销 / 历史 / 复制为新 / 删除：编辑之外的四条出口
+                // 撤销 / 历史 / 复制为新 / 删除：排成两行。四个按钮挤一行会超出屏宽，
+                // 最右边的「删除」会被裁掉（实测在 1080px 屏上直接消失）。
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    GhostButton("撤销", enabled = !busy, onClick = {
+                    GhostButton("撤销", enabled = !busy, modifier = Modifier.weight(1f), onClick = {
                         busy = true
                         notice = null
                         error = null
@@ -270,11 +271,15 @@ fun EntityEditorDialog(
                             }
                         }
                     })
-                    GhostButton("历史", enabled = !busy, onClick = { showHistory = true })
-                    GhostButton("复制为新", enabled = !busy, onClick = { showCopy = true })
-                    GhostButton("删除", enabled = !busy, onClick = { confirmDelete = true })
+                    GhostButton("历史", enabled = !busy, modifier = Modifier.weight(1f), onClick = { showHistory = true })
                 }
-
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    GhostButton("复制为新", enabled = !busy, modifier = Modifier.weight(1f), onClick = { showCopy = true })
+                    GhostButton("删除", enabled = !busy, modifier = Modifier.weight(1f), onClick = { confirmDelete = true })
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),

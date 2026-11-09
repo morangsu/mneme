@@ -75,10 +75,11 @@
 - **验收**：新建一条 → 矩阵出现 → 反查可命中 → 同步后另一设备可见。
 
 #### F-CAP-02 原样字段纠错（新建并替代）
-- **入口**：编辑面板里原样字段旁的「新建修订版」。
-- **流程**：以当前条目为模板 → 主键预填「原名（修订 yyyy-MM-dd）」→ 原样字段可改（因为是新条目）→ 保存 `supersedes`。
-- **结果**：新条目 `supersedes=旧 id`；旧条目自动打「已被替代」标记，矩阵默认隐藏，可在「显示被替代」开关下看到。
-- **验收**：原条目从旧 id 复制 → 改用量 → 保存 → 矩阵只剩新条目；反查只命中新条目。
+- **入口**：编辑面板里的「复制为新」。
+- **流程**：以当前条目为模板 → 主键预填「原名（修订）」→ 原样字段可改（因为是新条目）→ 保存 `supersedes`。
+- **结果**：新条目 `supersedes=旧 id`，**同一次 mutate 里**给旧条目盖 `superseded_by=新 id`（原子，无悬空引用）；
+  视图靠 `superseded_by` 过滤 —— 只看新条目的 supersedes 做不到"隐藏旧的"，因为过滤是逐行判定（实测踩过）。
+- **验收（真机 V2148A）**：复制麻黄 → 矩阵出现「麻黄（修订）」、旧麻黄消失；`superseded` 视图能看到旧版。
 
 #### F-CAP-03 粘贴解析（多行 → 字段）
 - **入口**：新建面板「从文本粘贴」。
@@ -248,6 +249,11 @@ Idle → Fetch(public/private) → Push(events) → Commit → Done(receipt)
 | `search` | `query`, `limit` | `{items:[...]}` | 全库检索 |
 | `parseFields` | `text` | `{fields, unmatched}` | 粘贴解析（Rust 侧做，桌面复用） |
 | `setCredential` | `name`, `value` | `{ok}` | 内存凭据，不落盘 |
+
+**真机回执（A1，V2148A / Android 13 / arm64，临时 root）**：
+新建（实体 6→7、卡片 77→79）→ 复制为新（矩阵里麻黄被「麻黄（修订）」顶替）→ 删除（回收站计数 +1）→
+恢复（回收站清空、rev 11）→ 编辑保存（rev 12）→ 撤销（rev 13，值复原）→ 历史（新建/删除/恢复/修改/撤销五态齐全，
+字段级 `before → after` 正确）。全程 0 崩溃。
 
 **实现状态**：`createEntity` / `deleteEntity` / `restoreEntity` / `listDeleted` / `entityHistory` / `undoEdit` / `entityTemplate`（新建表单定义）**已实现并有单测**（A1）；`quizQueue` / `suggestGrade` / `weakCards` / `search` / `parseFields` / `setCredential` 待 A2/A4。`state()` 新增 `kind` 与 `recycle` 两个字段。
 

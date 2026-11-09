@@ -735,11 +735,38 @@ pub fn create_entity(kind: String, fields_json: String, id_hint: String) -> Stri
             });
         }
 
+        // 「复制为新」：除了在新条目上写 supersedes，还要给旧条目盖 superseded_by，
+        // 否则视图无法只靠新条目的字段把旧版隐藏掉（过滤是逐行判定）。
+        let supersedes = entity.display_of("supersedes").trim().to_string();
+        let mut ops: Vec<Op> = Vec::new();
+        let base_rev = a.store.stats().rev;
+        if !supersedes.is_empty() {
+            match a.store.read(|m| m.entities.get(&supersedes).cloned()) {
+                Some(mut old) => {
+                    old.set("superseded_by", Value::Text(id.clone()), now);
+                    old.rev = base_rev + 1;
+                    old.updated_at = now;
+                    old.device = device.clone();
+                    ops.push(Op::UpsertEntity { entity: old });
+                }
+                None => {
+                    // 指了一条不存在的 id：拒绝，别写出悬空引用
+                    return err(format!("要替代的条目不存在：{supersedes}"));
+                }
+            }
+        }
+
         entity.id = id.clone();
-        entity.rev = a.store.stats().rev + 1;
-        let op = Op::UpsertEntity { entity: entity.clone() };
-        match a.store.mutate(&[op]) {
-            Ok(_) => json!({ "ok": true, "id": entity.id, "rev": entity.rev, "name": name }),
+        entity.rev = base_rev + ops.len() as u64 + 1;
+        ops.push(Op::UpsertEntity { entity: entity.clone() });
+        match a.store.mutate(&ops) {
+            Ok(_) => json!({
+                "ok": true,
+                "id": entity.id,
+                "rev": entity.rev,
+                "name": name,
+                "superseded": supersedes,
+            }),
             Err(e) => err(e),
         }
     })
@@ -1200,6 +1227,36 @@ mod tests {
         assert!(res.contains("\"ok\":true"), "{res}");
         assert!(!list_deleted().contains("测试药"));
         assert!(view("matrix".into()).contains("测试药"));
+
+        // 复制为新：旧条目要被盖上 superseded_by，主视图隐藏旧版、superseded 视图能看到
+        let copy = create_entity(
+            "herb".into(),
+            r#"{"name":"测试药（修订）","supersedes":"测试药"}"#.into(),
+            "测试药（修订）".into(),
+        );
+        assert!(copy.contains("\"ok\":true"), "{copy}");
+        let old_detail = entity_detail("测试药".into());
+        assert!(old_detail.contains("superseded_by"), "{old_detail}");
+        assert!(old_detail.contains("测试药（修订）"), "{old_detail}");
+
+        let matrix: Json = serde_json::from_str(&view("matrix".into())).unwrap();
+        let ids: Vec<&str> = matrix["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["_id"].as_str())
+            .collect();
+        assert!(ids.contains(&"测试药（修订）"), "新版应在主视图：{ids:?}");
+        assert!(!ids.contains(&"测试药"), "旧版应被隐藏：{ids:?}");
+
+        let sup: Json = serde_json::from_str(&view("superseded".into())).unwrap();
+        let sup_ids: Vec<&str> = sup["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["_id"].as_str())
+            .collect();
+        assert_eq!(sup_ids, vec!["测试药"], "被替代视图只应有旧版");
 
         let _ = fs::remove_dir_all(&root);
     }
