@@ -1,6 +1,7 @@
 use crate::op::Op;
 use mneme_core::{
     Card, DomainSchema, Entity, Group, InvertedIndex, ReviewEvent, TermAlias, generate_cards,
+    text::normalize,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -13,7 +14,16 @@ pub struct Memory {
     pub groups: BTreeMap<String, Group>,
     pub aliases: Vec<TermAlias>,
     pub events: Vec<ReviewEvent>,
-    pub cards: Vec<Card>,
+    /// 实体 id -> 该实体的全部卡（块内按卡 id 升序）。
+    ///
+    /// 为什么按实体分块而不是一个大 `Vec<Card>`：编辑一条药只影响它自己的卡，
+    /// 分块后替换是 O(log n)，而扁平表要么整表克隆、要么全表排序去重——
+    /// 那正是「改一个字要 290 ms」的来源。
+    pub cards: BTreeMap<String, Vec<Card>>,
+    /// card_id -> entity_id，按卡 id 取卡时不用扫全表。
+    pub card_owner: HashMap<String, String>,
+    /// 卡片总数（分块后 `cards.len()` 变成块数，别让它冒充卡数）。
+    cards_total: usize,
     pub index: InvertedIndex,
     pub rev: u64,
     pub device: String,
@@ -120,6 +130,8 @@ impl Memory {
         self.seen_events = self.events.iter().map(|e| e.key()).collect();
         self.rev = s.rev;
         self.cards.clear();
+        self.card_owner.clear();
+        self.cards_total = 0;
         self.dirty.clear();
     }
 
@@ -131,75 +143,230 @@ impl Memory {
         self.groups.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
-    /// 全量派生（open / refresh 时用）。
-    pub fn derive(&self) -> (InvertedIndex, Vec<Card>) {
+    /// 只重建倒排索引（并行）。卡片依赖它，所以 open 的第一步就是它。
+    pub fn rebuild_index(&mut self) {
         let entities = self.entities_vec();
-        let mut idx = InvertedIndex::default();
-        let mut cards = Vec::new();
-        if let Some(schema) = &self.schema {
-            idx.rebuild(&entities, schema);
-            cards = self.cards_for(schema, &entities, &idx, None);
+        self.index = InvertedIndex::default();
+        if let Some(schema) = self.schema.clone() {
+            self.index.rebuild(&entities, &schema);
         }
-        (idx, cards)
     }
 
-    /// 增量派生：只重生成脏实体的卡片，其余原样保留。
-    /// 索引仍全量重建（10k 条仅 ~26 ms，且避免维护 posting 删除的复杂度）。
-    pub fn derive_incremental(
-        &self,
-        old_cards: &[Card],
-        dirty: &HashSet<String>,
-    ) -> (InvertedIndex, Vec<Card>) {
-        if dirty.contains("*") {
-            return self.derive();
-        }
-        let entities = self.entities_vec();
-        let mut idx = InvertedIndex::default();
-        let Some(schema) = &self.schema else {
-            return (idx, Vec::new());
+    /// 只重建全部卡片块（索引需已就绪；缓存整体失效时用）。
+    pub fn rebuild_cards(&mut self) {
+        self.cards.clear();
+        self.card_owner.clear();
+        self.cards_total = 0;
+        let Some(schema) = self.schema.clone() else {
+            return;
         };
-        idx.rebuild(&entities, schema);
-        let mut cards: Vec<Card> = old_cards
-            .iter()
-            .filter(|c| !dirty.contains(&c.entity_id))
-            .cloned()
-            .collect();
-        cards.append(&mut self.cards_for(schema, &entities, &idx, Some(dirty)));
-        cards.sort_by(|a, b| a.id.cmp(&b.id));
-        cards.dedup_by(|a, b| a.id == b.id);
-        (idx, cards)
+        let groups = self.groups_map();
+        let entities: Vec<Entity> = self.entities.values().filter(|e| !e.deleted).cloned().collect();
+        let mut blocks: Vec<(String, Vec<Card>)> = Vec::with_capacity(entities.len());
+        for e in &entities {
+            let mut cs = generate_cards(&schema, e, &groups, &self.index).unwrap_or_default();
+            cs.sort_by(|a, b| a.id.cmp(&b.id));
+            cs.dedup_by(|a, b| a.id == b.id);
+            blocks.push((e.id.clone(), cs));
+        }
+        for (id, cs) in blocks {
+            self.put_block(&id, cs);
+        }
     }
 
-    fn cards_for(
-        &self,
-        schema: &DomainSchema,
-        entities: &[Entity],
-        idx: &InvertedIndex,
-        only: Option<&HashSet<String>>,
-    ) -> Vec<Card> {
+    /// 全量重建派生数据（schema 变更、批量导入后用）。
+    pub fn rebuild_derived(&mut self) {
+        self.rebuild_index();
+        self.rebuild_cards();
+    }
+
+    /// 只重建脏实体的索引与卡片。
+    ///
+    /// 前提：调用方保证 `dirty` 不含 `"*"` 且规模不大（Store 里超过阈值会退回全量）。
+    pub fn apply_derived(&mut self, dirty: &HashSet<String>) {
+        let Some(schema) = self.schema.clone() else {
+            return;
+        };
         let groups = self.groups_map();
-        let mut cards = Vec::new();
-        for e in entities.iter().filter(|e| !e.deleted) {
-            if only.is_some_and(|set| !set.contains(&e.id)) {
-                continue;
-            }
-            if let Ok(mut cs) = generate_cards(schema, e, &groups, idx) {
-                cards.append(&mut cs);
+        let mut updates: Vec<(String, Vec<Card>)> = Vec::with_capacity(dirty.len());
+        for id in dirty {
+            match self.entities.get(id).cloned() {
+                Some(e) if !e.deleted => {
+                    // 先改索引再生成卡片：卡片里的「这条线索是否唯一」要基于最新索引
+                    self.index.upsert(&e);
+                    let mut cs =
+                        generate_cards(&schema, &e, &groups, &self.index).unwrap_or_default();
+                    cs.sort_by(|a, b| a.id.cmp(&b.id));
+                    cs.dedup_by(|a, b| a.id == b.id);
+                    updates.push((id.clone(), cs));
+                }
+                Some(e) => {
+                    self.index.upsert(&e); // 墓碑：从索引里摘掉
+                    updates.push((id.clone(), Vec::new()));
+                }
+                None => updates.push((id.clone(), Vec::new())),
             }
         }
-        cards.sort_by(|a, b| a.id.cmp(&b.id));
-        cards.dedup_by(|a, b| a.id == b.id);
-        cards
+        for (id, cs) in updates {
+            self.put_block(&id, cs);
+        }
+    }
+
+    /// 换掉某个实体的整块卡片，同时维护 owner 映射与总数。
+    fn put_block(&mut self, entity_id: &str, cards: Vec<Card>) {
+        if let Some(old) = self.cards.remove(entity_id) {
+            self.cards_total = self.cards_total.saturating_sub(old.len());
+            for c in &old {
+                if self.card_owner.get(&c.id).map(String::as_str) == Some(entity_id) {
+                    self.card_owner.remove(&c.id);
+                }
+            }
+        }
+        if cards.is_empty() {
+            return;
+        }
+        for c in &cards {
+            self.card_owner.insert(c.id.clone(), entity_id.to_string());
+        }
+        self.cards_total += cards.len();
+        self.cards.insert(entity_id.to_string(), cards);
+    }
+
+    /// 用缓存里的块替换（指纹匹配才调用）。
+    pub fn adopt_blocks(&mut self, blocks: Vec<(String, Vec<Card>)>) {
+        for (id, cs) in blocks {
+            self.put_block(&id, cs);
+        }
+    }
+
+    pub fn cards_len(&self) -> usize {
+        self.cards_total
+    }
+
+    /// 扁平化（导出、出题队列等读路径用）。克隆一次，调用方只在需要 `&[Card]` 时用。
+    pub fn cards_flat(&self) -> Vec<Card> {
+        let mut v = Vec::with_capacity(self.cards_total);
+        for block in self.cards.values() {
+            v.extend(block.iter().cloned());
+        }
+        v
+    }
+
+    pub fn find_card(&self, id: &str) -> Option<&Card> {
+        let owner = self.card_owner.get(id)?;
+        self.cards.get(owner)?.iter().find(|c| c.id == id)
+    }
+
+    /// 全部实体的卡片块指纹（一次批量算，见下）。
+    ///
+    /// 依赖不只是「我自己变了没」，还包括**同线索词的实体变了没**：
+    /// 「具有『宣肺平喘』的是？」在只有麻黄时是一道唯一答案题，多了一味药就该变成
+    /// 「列出并说差异」。所以把每个线索词 posting 的规模与成员一起混进指纹——
+    /// 依赖变了才重算这一块。
+    ///
+    /// 批量算是因为单条算要重复做三件事：拼 `kind.field`、归一化同一个术语、
+    /// 反查 posting。2000 条实体逐条算要 130 ms，批量带缓存后约 7 ms。
+    pub fn block_fps(&self) -> HashMap<String, u64> {
+        let mut out = HashMap::with_capacity(self.entities.len());
+        let Some(schema) = self.schema.as_ref() else {
+            return out;
+        };
+        // kind.field 只与 (kind, field) 有关，缓存起来
+        let mut field_keys: HashMap<(&str, &str), String> = HashMap::new();
+        // 同一个术语（「发汗解表」这类）会被几十条药共用，归一化结果缓存下来
+        let mut norm_cache: HashMap<&str, String> = HashMap::new();
+        // 成员指纹按槽位预哈希：一个常见词条的 posting 可能有上百条，
+        // 每条都去 hash 一次 id 字符串，2000 味药就是千万级字符哈希。
+        let slot_fp: Vec<u64> = (0..self.index.slots())
+            .map(|i| {
+                self.index
+                    .id_of(i as u32)
+                    .map(|id| fnv1a(id.as_bytes()).rotate_left(17))
+                    .unwrap_or(0)
+            })
+            .collect();
+
+        for (id, e) in &self.entities {
+            let mut h = 0xcbf2_9ce4_8422_2325u64;
+            h = mix(h, fnv1a(id.as_bytes()));
+            h = mix(h, e.rev);
+            h = mix(h, e.deleted as u64);
+            h = mix(h, fnv1a(e.group_id.as_deref().unwrap_or("").as_bytes()));
+            if let Some(g) = e.group_id.as_deref().and_then(|g| self.groups.get(g)) {
+                h = mix(h, g.rev);
+                h = mix(h, fnv1a(g.name.as_bytes()));
+            }
+            if let Some(def) = schema.entity_def(&e.kind) {
+                for d in &def.directions {
+                    for f in &d.clue_fields {
+                        let value = e.get(f).or_else(|| {
+                            e.group_id
+                                .as_deref()
+                                .and_then(|g| self.groups.get(g))
+                                .and_then(|g| g.common.get(f))
+                        });
+                        let Some(v) = value else { continue };
+                        h = mix(h, fnv1a(f.as_bytes()));
+                        let field = field_keys
+                            .entry((e.kind.as_str(), f.as_str()))
+                            .or_insert_with(|| format!("{}.{}", e.kind, f))
+                            .clone();
+                        for t in v.terms() {
+                            let n = match norm_cache.get(t) {
+                                Some(n) => n.clone(),
+                                None => {
+                                    let n = normalize(t);
+                                    norm_cache.insert(t, n.clone());
+                                    n
+                                }
+                            };
+                            if n.is_empty() {
+                                continue;
+                            }
+                            let posting = self.index.lookup_norm(&field, &n);
+                            h = mix(h, posting.len() as u64);
+                            // 成员的交换和：只要「同线索的还有谁」变了就变，顺序无关。
+                            // 刻意不掺 rev —— 别人改了卡片不引用的字段时，这里的卡不该失效。
+                            let mut x = 0u64;
+                            for slot in posting {
+                                x ^= slot_fp[*slot as usize];
+                            }
+                            h = mix(h, x);
+                        }
+                    }
+                }
+            }
+            out.insert(id.clone(), h);
+        }
+        out
+    }
+
+    /// 领域包指纹：换领域包必须整份重算（字段、方向、题面模板都变了）。
+    pub fn schema_fp(&self) -> u64 {
+        fnv1a(self.schema_toml.as_bytes())
     }
 
     pub fn stats(&self) -> super::Stats {
         super::Stats {
             entities: self.entities.values().filter(|e| !e.deleted).count(),
             groups: self.groups.len(),
-            cards: self.cards.len(),
+            cards: self.cards_total,
             events: self.events.len(),
             rev: self.rev,
             device: self.device.clone(),
         }
     }
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+fn mix(h: u64, v: u64) -> u64 {
+    (h ^ v).wrapping_mul(0x100_0000_01b3)
 }

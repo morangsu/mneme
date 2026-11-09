@@ -284,7 +284,8 @@ fun QuizScreen() {
                             )
                             val accept = a.readable("accept")
                             if (accept.isNotBlank()) Dim("可接受表述：$accept")
-                            val boundary = a.optString("boundary", "")
+                            // boundary 是数组（每个答案字段一条），optString 会把它变成字面量 "[]"
+                            val boundary = a.readable("boundary")
                             if (boundary.isNotBlank()) {
                                 Text("⚠ 边界：$boundary", color = MnemeColors.Warn, fontSize = 12.sp)
                             }

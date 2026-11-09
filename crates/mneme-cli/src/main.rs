@@ -448,7 +448,7 @@ async fn main() -> anyhow::Result<()> {
 
         Cmd::Quiz { limit, reveal } => {
             let store = open(&cli)?;
-            let cards = store.read(|m| m.cards.clone());
+            let cards = store.read(|m| m.cards_flat());
             for (i, c) in cards.iter().take(*limit).enumerate() {
                 println!("\n{}. [{}] {}", i + 1, c.direction, c.prompt);
                 if *reveal {
@@ -842,7 +842,9 @@ fn bench_startup(n: usize, rounds: usize, schema_path: &std::path::Path) -> anyh
     let mut snaps: Vec<f64> = Vec::with_capacity(rounds);
     let mut replays: Vec<f64> = Vec::with_capacity(rounds);
     let mut derives: Vec<f64> = Vec::with_capacity(rounds);
+    let mut caches: Vec<f64> = Vec::with_capacity(rounds);
     let mut sqlites: Vec<f64> = Vec::with_capacity(rounds);
+    let mut walls_detail: Vec<String> = Vec::with_capacity(rounds);
 
     let mut last: Option<std::sync::Arc<Store>> = None;
     for _ in 0..rounds {
@@ -852,7 +854,9 @@ fn bench_startup(n: usize, rounds: usize, schema_path: &std::path::Path) -> anyh
         snaps.push(timing.snapshot_load.as_secs_f64() * 1000.0);
         replays.push(timing.replay.as_secs_f64() * 1000.0);
         derives.push(timing.derive.as_secs_f64() * 1000.0);
+        caches.push(timing.cards_cache.as_secs_f64() * 1000.0);
         sqlites.push(timing.sqlite_rebuild.as_secs_f64() * 1000.0);
+        walls_detail.push(format!("{:.0}", walls.last().copied().unwrap_or(0.0)));
         last = Some(store);
     }
     let store = last.expect("at least one round");
@@ -878,12 +882,12 @@ fn bench_startup(n: usize, rounds: usize, schema_path: &std::path::Path) -> anyh
     let mut idx = InvertedIndex::default();
     idx.rebuild(&list, &schema);
     let index_only = t.elapsed();
+    // 全量派生（冷路径）：索引已单独测过，这里测「索引 + 全部卡片」
     let t = Instant::now();
-    let (idx2, cards) = store.read(|m| m.derive());
+    store.refresh()?;
     let derive_all = t.elapsed();
-    let card_count = cards.len();
-    let (idx_fields, idx_terms) = idx2.shape();
-    drop((idx, cards));
+    let card_count = store.read(|m| m.cards_len());
+    let (idx_fields, idx_terms) = store.read(|m| m.index.shape());
 
     // 归因：单次 reverse 与单条实体卡片生成，各自多快
     let groups_map = store.read(|m| m.groups_map());
@@ -900,14 +904,14 @@ fn bench_startup(n: usize, rounds: usize, schema_path: &std::path::Path) -> anyh
     };
     let t = Instant::now();
     for _ in 0..200 {
-        let _ = idx2.reverse(&clue);
+        let _ = idx.reverse(&clue);
     }
     let reverse_each = t.elapsed().as_secs_f64() * 1e6 / 200.0;
     let t = Instant::now();
     let mut sample_cards = 0;
     let mut sample_candidates = 0;
     for _ in 0..20 {
-        if let Ok(cs) = mneme_core::generate_cards(&schema, &sample_entity, &groups_map, &idx2) {
+        if let Ok(cs) = mneme_core::generate_cards(&schema, &sample_entity, &groups_map, &idx) {
             sample_cards = cs.len();
             sample_candidates = cs.iter().map(|c| c.candidates.len()).sum();
         }
@@ -952,7 +956,9 @@ fn bench_startup(n: usize, rounds: usize, schema_path: &std::path::Path) -> anyh
     println!("    快照读取      {:>7.2} ms", median(&mut snaps.clone()));
     println!("    重放日志      {:>7.2} ms", median(&mut r));
     println!("    派生索引+卡   {:>7.2} ms", median(&mut d));
-    println!("    刷 SQLite     {:>7.2} ms   ← 每次 open 都全量重刷", median(&mut sq));
+    println!("    卡片缓存      {:>7.2} ms   ← 命中则只校验块指纹", median(&mut caches.clone()));
+    println!("    同步 SQLite   {:>7.2} ms   ← 只补差异", median(&mut sq));
+    println!("  逐次 wall       {}", walls_detail.join(" / "));
     println!("  首屏整表投影    {:>7.2} ms（{} 行）", first_paint.as_secs_f64() * 1000.0, list.len());
     println!("  派生拆解        索引 {:>6.1} ms / 索引+卡片 {:>6.1} ms / {} 张卡 / 倒排 {} 字段 {} 词条",
         index_only.as_secs_f64() * 1000.0,

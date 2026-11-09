@@ -468,7 +468,7 @@ fn quiz_queue_inner(new_limit: u32, due_limit: u32, session_limit: u32) -> Strin
         let now = now_ms();
         let (cards, events, entities, schema) = a.store.read(|m| {
             (
-                m.cards.clone(),
+                m.cards_flat(),
                 m.events.clone(),
                 m.entities_vec(),
                 m.schema.clone(),
@@ -551,7 +551,7 @@ fn quiz_queue_inner(new_limit: u32, due_limit: u32, session_limit: u32) -> Strin
 }#[uniffi::export]
 pub fn answer(card_id: String) -> String {
     call(|a| {
-        let found = a.store.read(|m| m.cards.iter().find(|c| c.id == card_id).cloned());
+        let found = a.store.read(|m| m.find_card(&card_id).cloned());
         match found {
             Some(c) => json!({ "answer": c.answer, "accept": c.accept, "boundary": c.immutable_boundary }),
             None => err("卡片不存在"),
@@ -577,7 +577,7 @@ pub fn review(card_id: String, grade: u8) -> String {
         // 复习后顺带派生掌握度：同实体所有已复习卡的 SRS 状态聚合。
         // 手工覆盖 30 天内有效（mastery_override_at），期间派生值不覆盖用户判断。
         let (mut events, cards, entities) =
-            a.store.read(|m| (m.events.clone(), m.cards.clone(), m.entities_vec()));
+            a.store.read(|m| (m.events.clone(), m.cards_flat(), m.entities_vec()));
         events.push(ev.clone());
         // 与出题用同一套调度参数，否则「队列说到期」和「掌握度说不用复习」会打架
         let states = fold_events(&events, &a.review.scheduler());
@@ -653,7 +653,7 @@ pub fn judge(card_id: String, input: String) -> String {
     call(|a| {
         let (card, defs) = a.store.read(|m| {
             (
-                m.cards.iter().find(|c| c.id == card_id).cloned(),
+                m.find_card(&card_id).cloned(),
                 m.schema.as_ref().map(|x| x.aliases.clone()).unwrap_or_default(),
             )
         });
@@ -675,7 +675,7 @@ pub fn suggest_grade(correct: bool, elapsed_ms: i64, score: f64) -> String {
 pub fn weak_cards(limit: u32) -> String {
     call(|a| {
         let now = now_ms();
-        let (events, cards) = a.store.read(|m| (m.events.clone(), m.cards.clone()));
+        let (events, cards) = a.store.read(|m| (m.events.clone(), m.cards_flat()));
         let weak = core_weak_cards(&events, now, limit as usize);
         let items: Vec<Json> = weak
             .iter()

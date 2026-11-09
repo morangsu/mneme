@@ -49,7 +49,8 @@ impl SqliteMirror {
                  k TEXT PRIMARY KEY, card_id TEXT NOT NULL, ts INTEGER NOT NULL,
                  grade INTEGER NOT NULL, device TEXT NOT NULL, json TEXT NOT NULL
              );
-             CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);",
+             CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+             CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT NOT NULL);",
         )?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -65,27 +66,28 @@ impl SqliteMirror {
         serde_json::to_string(e).unwrap_or_default()
     }
 
-    /// 全量重建（首次打开、载入远端快照、镜像损坏时）。
-    pub fn rebuild(
-        &self,
+    /// 只写脏实体的记录与卡片（rebuild / apply_changes / sync 的共同底座）。
+    fn write_dirty(
+        tx: &rusqlite::Transaction<'_>,
+        dirty: &std::collections::HashSet<String>,
         entities: &[Entity],
-        cards: &[Card],
+        cards: &std::collections::BTreeMap<String, Vec<Card>>,
         events: &[ReviewEvent],
+        events_from: usize,
     ) -> Result<()> {
-        let mut conn = self.conn.lock();
-        let tx = conn.transaction()?;
-        tx.execute_batch("DELETE FROM entities; DELETE FROM cards; DELETE FROM events;")?;
         {
-            let mut st = tx.prepare(
+            let mut del_cards = tx.prepare("DELETE FROM cards WHERE entity_id = ?1")?;
+            let mut up = tx.prepare(
                 "INSERT OR REPLACE INTO entities(id,kind,group_id,fingerprint,deleted,rev,json)
                  VALUES(?1,?2,?3,?4,?5,?6,?7)",
             )?;
-            for e in entities {
-                st.execute(params![
+            for e in entities.iter().filter(|e| dirty.contains(&e.id)) {
+                del_cards.execute(params![e.id])?;
+                up.execute(params![
                     e.id,
                     e.kind,
                     e.group_id,
-                    e.fingerprint(),
+                    format!("{:016x}", e.fast_fp()),
                     e.deleted as i64,
                     e.rev as i64,
                     Self::encode_entity(e)
@@ -96,22 +98,25 @@ impl SqliteMirror {
             let mut st = tx.prepare(
                 "INSERT OR REPLACE INTO cards(id,entity_id,direction,prompt,answer,json) VALUES(?1,?2,?3,?4,?5,?6)",
             )?;
-            for c in cards {
-                st.execute(params![
-                    c.id,
-                    c.entity_id,
-                    c.direction,
-                    c.prompt,
-                    c.answer,
-                    serde_json::to_string(c).unwrap_or_default()
-                ])?;
+            for id in dirty {
+                let Some(block) = cards.get(id) else { continue };
+                for c in block {
+                    st.execute(params![
+                        c.id,
+                        c.entity_id,
+                        c.direction,
+                        c.prompt,
+                        c.answer,
+                        serde_json::to_string(c).unwrap_or_default()
+                    ])?;
+                }
             }
         }
-        {
+        if events_from < events.len() {
             let mut st = tx.prepare(
                 "INSERT OR IGNORE INTO events(k,card_id,ts,grade,device,json) VALUES(?1,?2,?3,?4,?5,?6)",
             )?;
-            for e in events {
+            for e in &events[events_from..] {
                 st.execute(params![
                     e.key(),
                     e.card_id,
@@ -122,6 +127,133 @@ impl SqliteMirror {
                 ])?;
             }
         }
+        Ok(())
+    }
+
+    fn meta_get(conn: &rusqlite::Connection, k: &str) -> Option<String> {
+        conn.query_row("SELECT v FROM meta WHERE k = ?1", params![k], |r| r.get(0))
+            .ok()
+    }
+
+    fn meta_set(
+        tx: &rusqlite::Transaction<'_>,
+        k: &str,
+        v: &str,
+    ) -> Result<()> {
+        tx.execute(
+            "INSERT OR REPLACE INTO meta(k,v) VALUES(?1,?2)",
+            params![k, v],
+        )?;
+        Ok(())
+    }
+
+    /// 全量重刷（镜像损坏、schema 变更、首次建库时）。
+    pub fn rebuild(
+        &self,
+        entities: &[Entity],
+        cards: &std::collections::BTreeMap<String, Vec<Card>>,
+        events: &[ReviewEvent],
+    ) -> Result<()> {
+        self.invalidate()?;
+        self.sync_inner(entities, cards, events, true)
+    }
+
+    /// 清空镜像（下一次 `sync` 会整份写回）。比「逐行 DELETE」快，且不受残留影响。
+    pub fn invalidate(&self) -> Result<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        tx.execute_batch("DELETE FROM entities; DELETE FROM cards; DELETE FROM events; DELETE FROM meta;")?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 把镜像对齐到内存态：**只写差异**。
+    ///
+    /// 之前每次 open 都整表 DELETE+INSERT（2000 味药 577 ms）。镜像本来就是
+    /// 可重建的物化视图，没落后就不该写；落后也只补那几条。
+    /// 判定依据是 `(rev, fingerprint, deleted)`——rev 单调递增，fingerprint 兜住
+    /// 「不同设备各自加过 rev 但内容不同」的情况。
+    pub fn sync(
+        &self,
+        entities: &[Entity],
+        cards: &std::collections::BTreeMap<String, Vec<Card>>,
+        events: &[ReviewEvent],
+    ) -> Result<()> {
+        self.sync_inner(entities, cards, events, false)
+    }
+
+    fn sync_inner(
+        &self,
+        entities: &[Entity],
+        cards: &std::collections::BTreeMap<String, Vec<Card>>,
+        events: &[ReviewEvent],
+        force: bool,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+
+        // 镜像现有水位
+        let mut existing: std::collections::HashMap<String, (i64, u64, i64)> =
+            std::collections::HashMap::new();
+        if !force {
+            let mut st = tx.prepare("SELECT id, rev, fingerprint, deleted FROM entities")?;
+            let rows = st.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    u64::from_str_radix(&r.get::<_, Option<String>>(2)?.unwrap_or_default(), 16)
+                        .unwrap_or(0),
+                    r.get::<_, i64>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, rev, fp, del) = row?;
+                existing.insert(id, (rev, fp, del));
+            }
+        }
+        let events_from = if force {
+            0
+        } else {
+            Self::meta_get(&tx, "events_n")
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|n| *n <= events.len())
+                .unwrap_or(0)
+        };
+
+        let mut dirty: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for e in entities {
+            match existing.get(&e.id) {
+                Some((rev, fp, del))
+                    if *rev == e.rev as i64
+                        && *del == e.deleted as i64
+                        && *fp == e.fast_fp() => {}
+                _ => {
+                    dirty.insert(e.id.clone());
+                }
+            }
+        }
+        // 内存里已经没有的实体（硬删除）要从镜像摘掉
+        let mut removed: Vec<String> = Vec::new();
+        if !force {
+            let live: std::collections::HashSet<&str> =
+                entities.iter().map(|e| e.id.as_str()).collect();
+            for id in existing.keys() {
+                if !live.contains(id.as_str()) {
+                    removed.push(id.clone());
+                }
+            }
+        }
+        for id in &removed {
+            tx.execute("DELETE FROM cards WHERE entity_id = ?1", params![id])?;
+            tx.execute("DELETE FROM entities WHERE id = ?1", params![id])?;
+        }
+
+        if !dirty.is_empty() || !removed.is_empty() || events_from < events.len() {
+            Self::write_dirty(&tx, &dirty, entities, cards, events, events_from)?;
+        }
+        Self::meta_set(&tx, "events_n", &events.len().to_string())?;
+        let _ = Self::meta_set(&tx, "entities_n", &entities.len().to_string());
+
         tx.commit()?;
         Ok(())
     }
@@ -131,67 +263,38 @@ impl SqliteMirror {
         &self,
         dirty: &std::collections::HashSet<String>,
         entities: &[Entity],
-        cards: &[Card],
+        cards: &std::collections::BTreeMap<String, Vec<Card>>,
         events: &[ReviewEvent],
     ) -> Result<()> {
-        // 必须在加锁前判断：rebuild 会自己拿同一把非重入锁，
-        // 持锁调用会直接死锁（SetSchema 的 "*" 必走这条分支）。
-        if dirty.contains("*") {
-            return self.rebuild(entities, cards, events);
-        }
         let mut conn = self.conn.lock();
+        let events_from = Self::meta_get(&conn, "events_n")
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n <= events.len())
+            .unwrap_or(0);
         let tx = conn.transaction()?;
-        {
-            let mut del = tx.prepare("DELETE FROM cards WHERE entity_id = ?1")?;
-            let mut up = tx.prepare(
-                "INSERT OR REPLACE INTO entities(id,kind,group_id,fingerprint,deleted,rev,json)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7)",
-            )?;
-            for e in entities.iter().filter(|e| dirty.contains(&e.id)) {
-                del.execute(params![e.id])?;
-                up.execute(params![
-                    e.id,
-                    e.kind,
-                    e.group_id,
-                    e.fingerprint(),
-                    e.deleted as i64,
-                    e.rev as i64,
-                    Self::encode_entity(e)
-                ])?;
-            }
-        }
-        {
-            let mut st = tx.prepare(
-                "INSERT OR REPLACE INTO cards(id,entity_id,direction,prompt,answer,json) VALUES(?1,?2,?3,?4,?5,?6)",
-            )?;
-            for c in cards.iter().filter(|c| dirty.contains(&c.entity_id)) {
-                st.execute(params![
-                    c.id,
-                    c.entity_id,
-                    c.direction,
-                    c.prompt,
-                    c.answer,
-                    serde_json::to_string(c).unwrap_or_default()
-                ])?;
-            }
-        }
-        {
-            let mut st = tx.prepare(
-                "INSERT OR IGNORE INTO events(k,card_id,ts,grade,device,json) VALUES(?1,?2,?3,?4,?5,?6)",
-            )?;
-            for e in events {
-                st.execute(params![
-                    e.key(),
-                    e.card_id,
-                    e.ts,
-                    e.grade as i64,
-                    e.device,
-                    serde_json::to_string(e).unwrap_or_default()
-                ])?;
-            }
-        }
+        Self::write_dirty(&tx, dirty, entities, cards, events, events_from)?;
+        Self::meta_set(&tx, "events_n", &events.len().to_string())?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// WAL 收敛：把日志合并回主库并把文件截断。
+    ///
+    /// 一次大批量导入会让 WAL 涨到和主库一样大（实测 2000 味药：主库 34 MB / WAL 34 MB）。
+    /// 它不会无限涨（SQLite 会自动 checkpoint），但「目录里凭空多一倍的体积」很容易被
+    /// 当成数据膨胀。所以只在 WAL 已经很大时才主动收一次，平时不付这个代价。
+    pub fn checkpoint_if_large(&self, threshold_bytes: u64) -> Result<bool> {
+        let wal = self.path.with_file_name(format!(
+            "{}-wal",
+            self.path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+        ));
+        let size = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+        if size < threshold_bytes {
+            return Ok(false);
+        }
+        let conn = self.conn.lock();
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(true)
     }
 
     pub fn insert_event(&self, e: &ReviewEvent) -> Result<()> {
@@ -281,8 +384,8 @@ mod tests {
         let mut b = herb("桂枝");
         b.set("effects", Value::Tags(vec!["温通经脉".into()]), 2);
         let list = vec![herb("麻黄"), b];
-        m.rebuild(&list, &[], &[]).unwrap();
-        m.rebuild(&list, &[], &[]).unwrap();
+        m.rebuild(&list, &std::collections::BTreeMap::new(), &[]).unwrap();
+        m.rebuild(&list, &std::collections::BTreeMap::new(), &[]).unwrap();
         assert_eq!(m.counts().unwrap().entities, 2);
         assert!(m.integrity_check().unwrap());
         assert_eq!(m.search("宣肺平喘", 10).unwrap(), vec!["麻黄".to_string()]);
@@ -303,5 +406,38 @@ mod tests {
         m.insert_event(&e).unwrap();
         m.insert_event(&e).unwrap();
         assert_eq!(m.counts().unwrap().events, 1);
+    }
+
+    #[test]
+    fn checkpoint_truncates_wal_when_it_grows() {
+        let dir = std::env::temp_dir().join(format!("mneme-wal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = SqliteMirror::open(dir.join("index.sqlite")).unwrap();
+
+        // 造一批实体，让 WAL 长起来（真实场景是一次批量导入）
+        let entities: Vec<mneme_core::Entity> = (0..2000)
+            .map(|i| {
+                let mut e = mneme_core::Entity::new(format!("e{i}"), "herb", "t", 1);
+                e.set(
+                    "name",
+                    mneme_core::Value::Text(format!("药{i}")),
+                    1,
+                );
+                e
+            })
+            .collect();
+        m.rebuild(&entities, &std::collections::BTreeMap::new(), &[])
+            .unwrap();
+        let wal_path = dir.join("index.sqlite-wal");
+        let before = std::fs::metadata(&wal_path).map(|x| x.len()).unwrap_or(0);
+        assert!(before > 1024, "WAL 应该已经长大：{before} B");
+
+        // 阈值取 1 KB，必然触发
+        assert!(m.checkpoint_if_large(1024).unwrap(), "应该执行了 checkpoint");
+        let after = std::fs::metadata(&wal_path).map(|x| x.len()).unwrap_or(0);
+        assert!(after < before, "WAL 应收敛：{before} B -> {after} B");
+        drop(m);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

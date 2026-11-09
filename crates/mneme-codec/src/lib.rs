@@ -196,7 +196,7 @@ pub fn detect(path: Option<&Path>, bytes: &[u8]) -> Format {
 pub fn export_bytes(store: &Store, format: Format, now: i64) -> Result<(Vec<u8>, ExportReport)> {
     let snap = store.current_snapshot(now)?;
     let payload = Payload::from_snapshot(&snap);
-    let (schema, cards) = store.read(|m| (m.schema.clone(), m.cards.clone()));
+    let (schema, cards) = store.read(|m| (m.schema.clone(), m.cards_flat()));
     let schema_ref = |_f: Format| -> Result<&DomainSchema> {
         schema.as_ref().ok_or_else(|| Error::Codec("库里还没有 schema，无法按字段导出".into()))
     };

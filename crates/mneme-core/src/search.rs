@@ -14,7 +14,7 @@ use crate::entity::{Entity, Group, Value};
 use crate::groups::{GroupNode, tree as group_tree};
 use crate::pinyin::{initials, initials_match};
 use crate::schema::DomainSchema;
-use crate::text::{normalize, normalize_mapped};
+use crate::text::{NormMatcher, normalize, normalize_mapped};
 
 /// 命中方式。UI 用它决定高亮样式与说明文案（「拼音首字母」要显式告诉用户）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -84,6 +84,9 @@ pub fn search(
     let nodes: std::collections::HashMap<&str, &GroupNode> =
         tree.iter().map(|n| (n.id.as_str(), n)).collect();
 
+    // 每个词只建一次匹配器（前缀表 + 归一化），在整库文本上复用
+    let matchers: Vec<NormMatcher> = terms.iter().map(|t| NormMatcher::new(t)).collect();
+    let need_pinyin = terms.iter().any(|t| t.bytes().all(|b| b.is_ascii_lowercase()));
     // AND 优先：每个词都要在实体里找到位置
     let mut scored: Vec<(f64, Hit)> = Vec::new();
     let mut or_hits: Vec<(f64, Hit)> = Vec::new();
@@ -98,14 +101,26 @@ pub fn search(
         let primary = def.primary.clone().unwrap_or_else(|| "name".into());
         let name = e.display_of(&primary);
         let name_norm = normalize(&name);
-        let name_ini = initials(&name);
+        // 只有查询里出现纯字母时才需要首字母串（中文查询算它是白费）
+        let name_ini = if need_pinyin { initials(&name) } else { String::new() };
 
         let mut best: Option<Match> = None;
         let mut sum = 0.0;
         let mut hits_found = 0usize;
         let mut all = true;
-        for t in &terms {
-            match match_term(schema, e, &primary, &name, &name_norm, &name_ini, t, &nodes) {
+        for (ti, t) in terms.iter().enumerate() {
+            match match_term(
+                schema,
+                e,
+                &primary,
+                &name,
+                &name_norm,
+                &name_ini,
+                need_pinyin,
+                t,
+                &matchers[ti],
+                &nodes,
+            ) {
                 Some(m) => {
                     hits_found += 1;
                     sum += m.score;
@@ -183,7 +198,9 @@ fn match_term(
     name: &str,
     name_norm: &str,
     name_ini: &str,
+    need_pinyin: bool,
     term: &str,
+    matcher: &NormMatcher,
     nodes: &std::collections::HashMap<&str, &GroupNode>,
 ) -> Option<Match> {
     // 1. 主键（药名）——权重最高，完全相等 > 前缀 > 包含
@@ -209,7 +226,7 @@ fn match_term(
     // 2. 同义名（别称）——用户常常只记得别名
     if let Some(Value::Tags(tags)) = e.get("synonyms") {
         for t in tags {
-            if normalize(t).contains(term) {
+            if matcher.is_match(t) {
                 return Some(Match {
                     score: 450.0,
                     via: Via::Synonym,
@@ -222,7 +239,7 @@ fn match_term(
     }
 
     // 3. 拼音首字母——只对纯 ASCII 字母的查询生效，避免「辛」这种单字被误判
-    if let Some(is_prefix) = initials_match(name_ini, term) {
+    if let Some(is_prefix) = need_pinyin.then(|| initials_match(name_ini, term)).flatten() {
         return Some(Match {
             score: if is_prefix { 400.0 } else { 300.0 },
             via: Via::Pinyin,
@@ -231,7 +248,8 @@ fn match_term(
             snippet: name.to_string(),
         });
     }
-    if let Some(Value::Tags(tags)) = e.get("synonyms") {
+    if need_pinyin {
+        if let Some(Value::Tags(tags)) = e.get("synonyms") {
         for t in tags {
             let ini = initials(t);
             if let Some(is_prefix) = initials_match(&ini, term) {
@@ -243,6 +261,7 @@ fn match_term(
                     snippet: t.clone(),
                 });
             }
+        }
         }
     }
 
@@ -256,8 +275,8 @@ fn match_term(
         if text.is_empty() {
             continue;
         }
-        let (norm, map) = normalize_mapped(&text);
-        if !norm.contains(term) {
+        // 先做「有没有命中」的判定（零分配），命中了才为片段做一次归一化映射
+        if !matcher.is_match(&text) {
             continue;
         }
         let score = (200.0 - idx as f64 * 2.0).max(120.0);
@@ -267,7 +286,10 @@ fn match_term(
                 via: Via::Field,
                 field: key.clone(),
                 label: label_of(schema, &e.kind, key),
-                snippet: snippet(&text, &norm, &map, term),
+                snippet: {
+                    let (norm, map) = normalize_mapped(&text);
+                    snippet(&text, &norm, &map, term)
+                },
             });
         }
     }

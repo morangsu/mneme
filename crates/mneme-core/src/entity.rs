@@ -121,6 +121,42 @@ impl Entity {
     }
 
     /// 内容指纹：快照 diff 只比较这个，不逐字段深比。
+    /// 廉价内容指纹（FNV-1a），只给**可重建的物化镜像**用。
+    ///
+    /// `fingerprint()` 走 sha256，2000 条实体一次全表比对要 30 ms；
+    /// 镜像只是缓存，判错「有没有变」最多让镜像多刷一行，不需要密码学强度。
+    /// 同步/合并/冲突判定仍必须用 `fingerprint()`，那里的「不同」要能上溯。
+    pub fn fast_fp(&self) -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        let mut mix = |bytes: &[u8]| {
+            for b in bytes {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100_0000_01b3);
+            }
+            h = h.wrapping_mul(0x100_0000_01b3) ^ 0x1f;
+        };
+        mix(self.id.as_bytes());
+        mix(self.kind.as_bytes());
+        mix(self.group_id.as_deref().unwrap_or("").as_bytes());
+        for (k, v) in &self.fields {
+            mix(k.as_bytes());
+            // 刻意不用 `v.display()`：那是每个字段一次 String 分配，
+            // 2000 条实体 × 21 字段就是 4 万次分配，只为算个哈希。
+            match v {
+                Value::Text(t) => mix(t.as_bytes()),
+                Value::Tags(list) => {
+                    for t in list {
+                        mix(t.as_bytes());
+                    }
+                }
+                Value::Number(n) => mix(&n.to_le_bytes()),
+                Value::Bool(b) => mix(&[*b as u8]),
+            }
+        }
+        mix(if self.deleted { b"D" } else { b"A" });
+        h
+    }
+
     pub fn fingerprint(&self) -> String {
         let mut s = String::with_capacity(128);
         s.push_str(&self.id);

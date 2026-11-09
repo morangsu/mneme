@@ -11,6 +11,7 @@
 //! 并发：读多写少，外层一个 `parking_lot::RwLock`；索引与卡片重建在**锁外**
 //! 算好再整体换入，写临界区只做「追加日志 + 更新 BTreeMap」。
 
+pub mod cardcache;
 mod error;
 mod eventlog;
 mod history;
@@ -29,6 +30,10 @@ pub use op::Op;
 pub use snapshot::{Snapshot, SnapshotStore, FORMAT};
 
 use mneme_core::now_ms;
+
+/// 脏实体超过这个数就走全量重建：逐条增量在这些场景（批量导入、改分组、改 schema）
+/// 反而不如一次并行重建快，而且逐条生成卡片时彼此看不到对方，候选判定会不一致。
+const FULL_DERIVE_THRESHOLD: usize = 64;
 use parking_lot::RwLock;
 use std::{
     fs,
@@ -49,13 +54,15 @@ pub struct OpenTimings {
     pub replay: std::time::Duration,
     /// 派生倒排索引与卡片（`refresh`）
     pub derive: std::time::Duration,
-    /// 全量重刷 SQLite 物化镜像
+    /// 读/写卡片缓存（命中时省掉整段卡片生成）
+    pub cards_cache: std::time::Duration,
+    /// 同步 SQLite 物化镜像（只有脏实体才写）
     pub sqlite_rebuild: std::time::Duration,
 }
 
 impl OpenTimings {
     pub fn total(&self) -> std::time::Duration {
-        self.snapshot_load + self.replay + self.derive + self.sqlite_rebuild
+        self.snapshot_load + self.replay + self.derive + self.cards_cache + self.sqlite_rebuild
     }
 }
 
@@ -111,6 +118,11 @@ impl Store {
         log.replay(&mut mem)?;
         t.replay = started.elapsed();
 
+        // 索引是卡片的前置：候选判定要查 posting
+        let started = std::time::Instant::now();
+        mem.rebuild_index();
+        t.derive = started.elapsed();
+
         #[cfg(feature = "sqlite")]
         let sqlite = Some(Arc::new(sqlite_mirror::SqliteMirror::open(
             root.join("index.sqlite"),
@@ -124,17 +136,98 @@ impl Store {
             #[cfg(feature = "sqlite")]
             sqlite,
         });
+
+        // 卡片：能命中缓存就只重算「依赖变了」的那几块
         let started = std::time::Instant::now();
-        store.refresh()?;
-        t.derive = started.elapsed();
+        store.load_or_build_cards()?;
+        t.cards_cache = started.elapsed();
 
         #[cfg(feature = "sqlite")]
         {
             let started = std::time::Instant::now();
-            store.rebuild_sqlite()?;
+            store.sync_sqlite()?;
+            // WAL 超过 16 MB 才收敛（一次大导入会留下与主库等大的 WAL）
+            if let Some(s) = &store.sqlite {
+                let _ = s.checkpoint_if_large(16 * 1024 * 1024);
+            }
             t.sqlite_rebuild = started.elapsed();
         }
         Ok((store, t))
+    }
+
+    /// 优先用 `cards.bin` 里的块，只重算指纹不匹配的实体。
+    ///
+    /// 命中率高的情况：换设备打开同一份数据、重启后没改过东西、只改了少数几条。
+    /// 每次只要有任何一块被重算，就把整份缓存重写一遍（写 10 MB 约 20 ms，
+    /// 远低于重算 2.4 s；不写的话下次还是全量算）。
+    fn load_or_build_cards(&self) -> Result<()> {
+        let t0 = std::time::Instant::now();
+        // 直接拿走所有权（`remove` 移出块），避免把 34k 张卡整份 clone 一遍
+        let mut cache = cardcache::load(&self.root);
+        let t_load = t0.elapsed();
+
+        let (schema_fp, mut missing, mut adopted, any_cache) = {
+            let m = self.mem.read();
+            let schema_fp = m.schema_fp();
+            let fps = m.block_fps();
+            let mut missing: Vec<String> = Vec::new();
+            let mut adopted: Vec<(String, Vec<mneme_core::Card>)> = Vec::new();
+            let mut usable = cache.take().filter(|c| c.schema_fp == schema_fp);
+            for id in m.entities.keys() {
+                if m.entities[id].deleted {
+                    continue;
+                }
+                let fp = fps.get(id).copied();
+                let hit = match (&mut usable, fp) {
+                    (Some(c), Some(fp)) => c.blocks.get(id).map(|b| b.fp == fp).unwrap_or(false),
+                    _ => false,
+                };
+                if hit {
+                    let block = usable
+                        .as_mut()
+                        .and_then(|c| c.blocks.remove(id))
+                        .expect("checked");
+                    adopted.push((id.clone(), block.cards));
+                } else {
+                    missing.push(id.clone());
+                }
+            }
+            (schema_fp, missing, adopted, usable.is_some())
+        };
+        let t_plan = t0.elapsed();
+
+        if !adopted.is_empty() {
+            self.mem.write().adopt_blocks(adopted);
+        }
+        if !missing.is_empty() {
+            let dirty: std::collections::HashSet<String> = missing.iter().cloned().collect();
+            if missing.len() > FULL_DERIVE_THRESHOLD {
+                self.mem.write().rebuild_cards();
+            } else {
+                self.mem.write().apply_derived(&dirty);
+            }
+        }
+        let t_build = t0.elapsed();
+
+        // 缓存缺失/不匹配/有块重算过 -> 重写一份
+        if !any_cache || !missing.is_empty() {
+            let m = self.mem.read();
+            let fps = m.block_fps();
+            let mut blocks = std::collections::HashMap::with_capacity(m.cards.len());
+            for (id, cards) in &m.cards {
+                blocks.insert(
+                    id.clone(),
+                    cardcache::Block {
+                        fp: fps.get(id).copied().unwrap_or(0),
+                        cards: cards.clone(),
+                    },
+                );
+            }
+            let cache = cardcache::CardCache { schema_fp, blocks };
+            // 写失败不影响使用，只是下次还得重算
+            let _ = cardcache::save(&self.root, &cache);
+        }
+        Ok(())
     }
 
     pub fn root(&self) -> &Path {
@@ -165,7 +258,7 @@ impl Store {
             return Ok(0);
         }
         self.log.append(ops)?;
-        let (n, dirty, old_cards) = {
+        let (n, dirty) = {
             let mut m = self.mem.write();
             let mut n = 0;
             for op in ops {
@@ -174,9 +267,16 @@ impl Store {
                 }
             }
             let dirty = std::mem::take(&mut m.dirty);
-            (n, dirty, m.cards.clone())
+            if !dirty.is_empty() {
+                if dirty.contains("*") || dirty.len() > FULL_DERIVE_THRESHOLD {
+                    m.rebuild_derived();
+                } else {
+                    m.apply_derived(&dirty);
+                }
+            }
+            (n, dirty)
         };
-        // P0：只有复习事件时索引/卡片都不变，连重建都跳过
+        // 只有复习事件时索引/卡片都不变，连重建都跳过
         if dirty.is_empty() {
             #[cfg(feature = "sqlite")]
             if let Some(s) = &self.sqlite {
@@ -188,24 +288,15 @@ impl Store {
             }
             return Ok(n);
         }
-        // 派生在锁外算好，写临界区只做整体换入
-        let (idx, cards) = {
-            let m = self.mem.read();
-            m.derive_incremental(&old_cards, &dirty)
-        };
-        {
-            let mut m = self.mem.write();
-            m.index = idx;
-            m.cards = cards;
-        }
         #[cfg(feature = "sqlite")]
-        if let Some(s) = &self.sqlite {
-            let (entities, all_cards, events) = {
-                let m = self.mem.read();
-                (m.entities_vec(), m.cards.clone(), m.events.clone())
-            };
-            s.apply_changes(&dirty, &entities, &all_cards, &events)?;
+        {
+            let m = self.mem.read();
+            if let Some(s) = &self.sqlite {
+                s.apply_changes(&dirty, &m.entities_vec(), &m.cards, &m.events)?;
+            }
         }
+        // 卡片缓存跟着失效：这里不重写（写 10 MB 会拖慢每次保存），
+        // 交给下次 open 时按块指纹补算。
         Ok(n)
     }
 
@@ -214,31 +305,32 @@ impl Store {
         self.sqlite.as_ref()
     }
 
-    /// SQLite 是可重建的物化镜像：从当前内存态整表重刷。
-    /// 日志/快照才是真相源，所以镜像坏了直接调它即可。
+    /// 把 SQLite 镜像对齐到内存态：只写差异（新增/修改/删除 + 新事件）。
+    ///
+    /// 以前是每次 open 都整表 DELETE+INSERT，2000 味药要 577 ms，纯浪费；
+    /// 镜像本来就是「可重建的物化视图」，只有真的落后才需要补。
+    #[cfg(feature = "sqlite")]
+    pub fn sync_sqlite(&self) -> Result<()> {
+        if let Some(s) = &self.sqlite {
+            let m = self.mem.read();
+            s.sync(&m.entities_vec(), &m.cards, &m.events)?;
+        }
+        Ok(())
+    }
+
+    /// 保留旧入口：强制整表重刷（镜像怀疑损坏 / 迁移后用）。
     #[cfg(feature = "sqlite")]
     pub fn rebuild_sqlite(&self) -> Result<()> {
         if let Some(s) = &self.sqlite {
-            let (entities, cards, events) = {
-                let m = self.mem.read();
-                (m.entities_vec(), m.cards.clone(), m.events.clone())
-            };
-            s.rebuild(&entities, &cards, &events)?;
+            s.invalidate()?;
+            self.sync_sqlite()?;
         }
         Ok(())
     }
 
     /// 索引与卡片是派生数据，锁外算完整体换入。
     pub fn refresh(&self) -> Result<()> {
-        let (idx, cards) = {
-            let m = self.mem.read();
-            m.derive()
-        };
-        {
-            let mut m = self.mem.write();
-            m.index = idx;
-            m.cards = cards;
-        }
+        self.mem.write().rebuild_derived();
         Ok(())
     }
 

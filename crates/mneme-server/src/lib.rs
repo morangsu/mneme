@@ -380,7 +380,7 @@ async fn api_quiz(
     Query(q): Query<HashMap<String, String>>,
 ) -> Json<JsonValue> {
     let limit: usize = q.get("limit").and_then(|x| x.parse().ok()).unwrap_or(1);
-    let (cards, states) = s.store.read(|m| (m.cards.clone(), fold_events(&m.events, &Sm2Scheduler::default())));
+    let (cards, states) = s.store.read(|m| (m.cards_flat(), fold_events(&m.events, &Sm2Scheduler::default())));
     let due = due_cards(&states, now_ms(), cards.len());
     let mut picked: Vec<_> = due
         .iter()
@@ -402,7 +402,7 @@ async fn api_quiz(
 }
 
 async fn api_answer(State(s): State<AppState>, Path(id): Path<String>) -> Json<JsonValue> {
-    let found = s.store.read(|m| m.cards.iter().find(|c| c.id == id).cloned());
+    let found = s.store.read(|m| m.find_card(&id).cloned());
     match found {
         Some(c) => Json(json!({"answer": c.answer, "accept": c.accept, "boundary": c.immutable_boundary})),
         None => Json(json!({ "error": "卡片不存在" })),
@@ -440,7 +440,7 @@ struct JudgeBody {
 async fn api_judge(State(s): State<AppState>, Json(b): Json<JudgeBody>) -> Json<JsonValue> {
     let (card, defs) = s.store.read(|m| {
         (
-            m.cards.iter().find(|c| c.id == b.card_id).cloned(),
+            m.find_card(&b.card_id).cloned(),
             m.schema.as_ref().map(|x| x.aliases.clone()).unwrap_or_default(),
         )
     });
