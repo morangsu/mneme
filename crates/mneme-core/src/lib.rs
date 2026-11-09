@@ -30,8 +30,9 @@ pub use index::{InvertedIndex, Scored};
 pub use merge::{Diff, EntityChange, FieldChange, MergePolicy, diff_entities, merge_events, three_way};
 pub use schema::{DirectionDef, DomainSchema, EntityDef, FieldDef, FieldKind, FilterOp, TermAliasDef, ViewDef, ViewFilter};
 pub use srs::{
-    DailyQueue, FsrsScheduler, Scheduler, Sm2Scheduler, SrsState, WeakCard, daily_queue,
-    due_cards, fold_events, mastery_label, suggest_grade, weak_cards,
+    DailyQueue, FSRS5_DEFAULT_W, FsrsScheduler, ReviewConfig, Scheduler, Sm2Scheduler, SrsState,
+    WeakCard, daily_queue, due_cards, fold_events, mastery_label, mastery_label_ext,
+    suggest_grade, weak_cards,
 };
 pub use text::{TermTable, dice, normalize, remove_redundant, similarity};
 

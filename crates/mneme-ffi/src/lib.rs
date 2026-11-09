@@ -9,8 +9,8 @@
 
 use mneme_codec::{self as codec, Format, ImportOptions, ImportStrategy};
 use mneme_core::{
-    DomainSchema, Entity, FieldKind, ReviewEvent, Sm2Scheduler, TermTable, Value, daily_queue,
-    due_cards, fold_events, generate_choices, judge as judge_answer, mastery_label, now_ms,
+    DomainSchema, Entity, FieldKind, ReviewConfig, ReviewEvent, TermTable, Value, daily_queue,
+    fold_events, generate_choices, judge as judge_answer, mastery_label_ext, now_ms,
     suggest_grade as core_suggest_grade, weak_cards as core_weak_cards,
 };
 use mneme_store::{Op, Store};
@@ -38,6 +38,8 @@ struct App {
     provenance: ProvenanceStore,
     plans: BTreeMap<String, PullPlan>,
     public: Option<Arc<dyn PublicSource>>,
+    /// 复习参数（可从 review.json 覆盖）
+    review: ReviewConfig,
 }
 
 static STATE: OnceLock<Mutex<Option<App>>> = OnceLock::new();
@@ -73,6 +75,14 @@ where
 
 fn err(e: impl std::fmt::Display) -> Json {
     json!({ "error": e.to_string() })
+}
+
+fn load_review_config(root: &Path) -> ReviewConfig {
+    fs::read(root.join("review.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<ReviewConfig>(&b).ok())
+        .map(ReviewConfig::normalized)
+        .unwrap_or_default()
 }
 
 fn load_topology(root: &Path) -> Topology {
@@ -175,6 +185,7 @@ pub fn open_database(path: String, device: String) -> String {
                 )) as Arc<dyn PublicSource>)
             }
         };
+        let review = load_review_config(&root);
         let app = App {
             root,
             store,
@@ -183,6 +194,7 @@ pub fn open_database(path: String, device: String) -> String {
             provenance,
             plans: BTreeMap::new(),
             public,
+            review,
         };
         let _ = STATE.set(Mutex::new(Some(app)));
         Ok(json!({ "ok": true, "path": path, "device": device }))
@@ -343,18 +355,56 @@ pub fn reverse(clues_json: String) -> String {
 
 #[uniffi::export]
 pub fn quiz(limit: u32) -> String {
-    // 老入口：到期与新卡合计不超过 limit。新代码请用 quizQueue。
-    quiz_queue_inner(limit, limit)
+    // 老入口：到期与新卡合计不超过 limit。新代码请用 quizPlan。
+    quiz_queue_inner(limit, limit, limit)
 }
 
 /// 每日队列：到期优先（越逾期越靠前）、新卡限量（默认 10 / 50）。
 /// `weak` 是错题本张数，UI 据此显示「薄弱 N 张」入口。
 #[uniffi::export]
 pub fn quiz_queue(new_limit: u32, due_limit: u32) -> String {
-    quiz_queue_inner(new_limit, due_limit)
+    quiz_queue_inner(new_limit, due_limit, 0)
 }
 
-fn quiz_queue_inner(new_limit: u32, due_limit: u32) -> String {
+/// 按用户配置出题（新卡/天、到期/天、本轮张数、期望记忆率都在 `review.json`）。
+#[uniffi::export]
+pub fn quiz_plan() -> String {
+    let (new_limit, due_limit, session) = lock()
+        .map(|g| {
+            let a = g.as_ref().expect("checked");
+            (
+                a.review.new_per_day,
+                a.review.reviews_per_day,
+                a.review.session_limit,
+            )
+        })
+        .unwrap_or((10, 100, 20));
+    quiz_queue_inner(new_limit, due_limit, session)
+}
+
+/// 读取复习参数。
+#[uniffi::export]
+pub fn review_config() -> String {
+    call(|a| json!(a.review))
+}
+
+/// 写入复习参数：越界值自动夹回合理区间，并落盘到 `review.json`。
+#[uniffi::export]
+pub fn set_review_config(config_json: String) -> String {
+    call(|a| {
+        let cfg: ReviewConfig = match serde_json::from_str::<ReviewConfig>(&config_json) {
+            Ok(c) => c.normalized(),
+            Err(e) => return err(format!("复习配置 JSON 有误: {e}")),
+        };
+        if let Err(e) = save_json(&a.root, "review.json", &cfg) {
+            return err(format!("保存 review.json 失败: {e}"));
+        }
+        a.review = cfg.clone();
+        json!({ "ok": true, "config": cfg })
+    })
+}
+
+fn quiz_queue_inner(new_limit: u32, due_limit: u32, session_limit: u32) -> String {
     call(|a| {
         let now = now_ms();
         let (cards, events, entities, schema) = a.store.read(|m| {
@@ -365,9 +415,17 @@ fn quiz_queue_inner(new_limit: u32, due_limit: u32) -> String {
                 m.schema.clone(),
             )
         });
-        let states = fold_events(&events, &Sm2Scheduler::default());
+        let sched = a.review.scheduler();
+        let states = fold_events(&events, &sched);
         let q = daily_queue(&cards, &states, now, new_limit as usize, due_limit as usize);
         let weak_n = core_weak_cards(&events, now, usize::MAX).len();
+        let leech_n = states.values().filter(|s| s.leech).count();
+
+        let mut ids = q.items.clone();
+        if session_limit > 0 && ids.len() > session_limit as usize {
+            ids.truncate(session_limit as usize);
+        }
+
         let entity_name = |eid: &str| {
             entities
                 .iter()
@@ -375,8 +433,22 @@ fn quiz_queue_inner(new_limit: u32, due_limit: u32) -> String {
                 .map(|e| e.display_of("name"))
                 .unwrap_or_else(|| eid.to_string())
         };
-        let items: Vec<Json> = q
-            .items
+        // 答案是不是「药名」：是的话 UI 绝不能把实体名露出来（等于直接给答案）。
+        // 判定依据是卡片自己的 answer_fields，而不是方向字符串 —— 领域包换了方向名也不会失效。
+        let ask_name = |c: &mneme_core::Card| {
+            let primary = entities
+                .iter()
+                .find(|e| e.id == c.entity_id)
+                .and_then(|e| {
+                    schema
+                        .as_ref()
+                        .and_then(|s| s.entity_def(&e.kind))
+                        .and_then(|d| d.primary.clone())
+                })
+                .unwrap_or_else(|| "name".into());
+            c.answer_fields.iter().any(|f| *f == primary)
+        };
+        let items: Vec<Json> = ids
             .iter()
             .filter_map(|id| cards.iter().find(|c| &c.id == id))
             .map(|c| {
@@ -386,22 +458,38 @@ fn quiz_queue_inner(new_limit: u32, due_limit: u32) -> String {
                         .find(|e| e.id == c.entity_id)
                         .map(|e| generate_choices(s, e, &entities, 3))
                 }).unwrap_or_default();
+                let st = states.get(&c.id);
+                let elapsed_days = st
+                    .map(|s| (now - s.last).max(0) as f64 / 86_400_000.0)
+                    .unwrap_or(0.0);
                 json!({
                     "id": c.id, "prompt": c.prompt, "direction": c.direction,
                     "entity_id": c.entity_id,
                     "entity_name": entity_name(&c.entity_id),
+                    "ask_name": ask_name(c),
+                    "answer_fields": c.answer_fields,
                     "choices": choices, "boundary": c.immutable_boundary,
+                    // 记忆状态透明化：让用户看见「这张卡多久后该复习、有多难」
+                    "stability": st.map(|s| (s.stability * 100.0).round() / 100.0),
+                    "difficulty": st.map(|s| (s.difficulty * 100.0).round() / 100.0),
+                    "lapses": st.map(|s| s.lapses).unwrap_or(0),
+                    "leech": st.map(|s| s.leech).unwrap_or(false),
+                    "retrievability": st.map(|s| {
+                        (sched.retrievability(elapsed_days, s.stability) * 100.0).round() / 100.0
+                    }),
                 })
             })
             .collect();
         json!({
             "due": q.due.len(), "new": q.new.len(), "total": q.items.len(),
-            "weak": weak_n,
+            "queued": items.len(),
+            "weak": weak_n, "leech": leech_n,
+            "session_limit": session_limit,
+            "retention": a.review.desired_retention,
             "cards": items,
         })
     })
-}
-#[uniffi::export]
+}#[uniffi::export]
 pub fn answer(card_id: String) -> String {
     call(|a| {
         let found = a.store.read(|m| m.cards.iter().find(|c| c.id == card_id).cloned());
@@ -432,7 +520,8 @@ pub fn review(card_id: String, grade: u8) -> String {
         let (mut events, cards, entities) =
             a.store.read(|m| (m.events.clone(), m.cards.clone(), m.entities_vec()));
         events.push(ev.clone());
-        let states = fold_events(&events, &Sm2Scheduler::default());
+        // 与出题用同一套调度参数，否则「队列说到期」和「掌握度说不用复习」会打架
+        let states = fold_events(&events, &a.review.scheduler());
         let entity_id = cards
             .iter()
             .find(|c| c.id == card_id)
@@ -451,6 +540,10 @@ pub fn review(card_id: String, grade: u8) -> String {
                 let stability =
                     reviewed.iter().map(|s| s.stability).sum::<f64>() / reviewed.len() as f64;
                 let lapses: u32 = reviewed.iter().map(|s| s.lapses).sum();
+                // 覆盖率：这味药有多少张卡、复习过几张。新卡会稀释均值，
+                // 所以「熟练」还得要求大部分角度都学过（详见 mastery_label_ext）。
+                let reviewed_n = reviewed.len() as u32;
+                let total_n = e_cards.len() as u32;
                 let ids: Vec<&str> = e_cards.iter().map(|c| c.id.as_str()).collect();
                 let last_grade = events
                     .iter()
@@ -458,7 +551,7 @@ pub fn review(card_id: String, grade: u8) -> String {
                     .map(|e| (e.ts, e.grade))
                     .max_by_key(|x| x.0)
                     .map(|x| x.1);
-                let label = mastery_label(stability, lapses, last_grade);
+                let label = mastery_label_ext(stability, lapses, last_grade, reviewed_n, total_n);
 
                 let override_at = entity.get("mastery_override_at").and_then(|v| match v {
                     Value::Number(n) => Some(*n as i64),
@@ -473,10 +566,18 @@ pub fn review(card_id: String, grade: u8) -> String {
                     e2.rev = a.store.stats().rev + 1;
                     e2.updated_at = now;
                     e2.device = device.clone();
-                    mastery = json!({ "changed": true, "label": label, "prev": cur });
+                    mastery = json!({
+                        "changed": true, "label": label, "prev": cur,
+                        "reviewed": reviewed_n, "total": total_n,
+                        "stability": (stability * 100.0).round() / 100.0,
+                    });
                     ops.push(Op::UpsertEntity { entity: e2 });
                 } else {
-                    mastery = json!({ "changed": false, "label": cur, "overridden": overridden });
+                    mastery = json!({
+                        "changed": false, "label": cur, "overridden": overridden,
+                        "reviewed": reviewed_n, "total": total_n,
+                        "stability": (stability * 100.0).round() / 100.0,
+                    });
                 }
             }
         }
@@ -524,6 +625,9 @@ pub fn weak_cards(limit: u32) -> String {
                 json!({
                     "card_id": c.id, "prompt": c.prompt, "direction": c.direction,
                     "entity_name": entities_name(a, &c.entity_id),
+                    // 薄弱模式同样是出题：答药名的卡不能预显药名
+                    "ask_name": c.answer_fields.iter().any(|f| f == "name"),
+                    "answer_fields": c.answer_fields,
                     "misses": w.misses, "last_ts": w.last_ts,
                 })
             })
@@ -1306,6 +1410,7 @@ mod tests {
             provenance: ProvenanceStore::default(),
             plans: BTreeMap::new(),
             public: None,
+            review: ReviewConfig::default(),
         };
         let _ = STATE.set(Mutex::new(Some(app)));
         assert!(state().contains("中药学"));
@@ -1374,6 +1479,32 @@ mod tests {
             detail.contains("生疏") || detail.contains("熟悉") || detail.contains("熟练"),
             "mastery 应派生出三档之一：{detail}"
         );
+
+        // ---- 复习参数可配置：本轮张数 / 新卡上限 / 期望记忆率 ----
+        let cfg = review_config();
+        assert!(cfg.contains("desired_retention"), "{cfg}");
+        assert!(cfg.contains("session_limit"), "{cfg}");
+        let saved = set_review_config(
+            r#"{"new_per_day":3,"reviews_per_day":40,"session_limit":2,"desired_retention":0.85,
+                "max_interval_days":3650,"easy_interval_days":4,"leech_threshold":8,
+                "learning_steps_minutes":[1,10]}"#
+                .into(),
+        );
+        assert!(saved.contains("\"ok\":true"), "{saved}");
+        assert!(saved.contains("\"session_limit\":2"), "越界值应原样接受：{saved}");
+        let plan: Json = serde_json::from_str(&quiz_plan()).unwrap();
+        assert_eq!(plan["session_limit"].as_u64(), Some(2), "本轮张数应生效：{plan}");
+        assert!(plan["cards"].as_array().unwrap().len() <= 2, "{plan}");
+        assert!(plan["retention"].as_f64().unwrap() > 0.84);
+        // 越界值夹回
+        let clamped = set_review_config(
+            r#"{"new_per_day":9999,"reviews_per_day":99999,"session_limit":9999,"desired_retention":0.5,
+                "max_interval_days":0,"easy_interval_days":0,"leech_threshold":0,
+                "learning_steps_minutes":[]}"#
+                .into(),
+        );
+        assert!(clamped.contains("\"new_per_day\":500"), "{clamped}");
+        assert!(clamped.contains("\"desired_retention\":0.7"), "{clamped}");
 
         // 错题本：连错两次（同毫秒事件会被幂等键去重，必须隔开）
         let _ = review(card_id.clone(), 1);

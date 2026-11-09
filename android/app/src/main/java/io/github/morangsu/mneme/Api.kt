@@ -40,6 +40,9 @@ object MnemeApiStub {
         "quizQueue" -> SAMPLE_QUIZ
         "suggestGrade" -> JSONObject().put("grade", 3).put("reason", "正常速度").toString()
         "weakCards" -> "{\"items\":[]}"
+        "quizPlan" -> SAMPLE_QUIZ
+        "reviewConfig" -> "{\"new_per_day\":10,\"reviews_per_day\":100,\"session_limit\":20,\"desired_retention\":0.9,\"max_interval_days\":3650,\"easy_interval_days\":4,\"leech_threshold\":8,\"learning_steps_minutes\":[1,10]}"
+        "setReviewConfig" -> "{\"ok\":true}"
         "answer" -> SAMPLE_ANSWER
         "entityDetail" -> SAMPLE_ENTITY_DETAIL
         "entityTemplate" -> SAMPLE_ENTITY_DETAIL
@@ -241,6 +244,9 @@ object MnemeBridge {
                     args["score"] as Double,
                 )
                 "weakCards" -> MnemeApi.weakCards(args["limit"] as UInt)
+                "quizPlan" -> MnemeApi.quizPlan()
+                "reviewConfig" -> MnemeApi.reviewConfig()
+                "setReviewConfig" -> MnemeApi.setReviewConfig(args["configJson"] as String)
                 "answer" -> MnemeApi.answer(args["cardId"] as String)
                 "review" -> MnemeApi.review(args["cardId"] as String, args["grade"] as UByte)
                 "judge" -> MnemeApi.judge(args["cardId"] as String, args["input"] as String)
@@ -331,6 +337,13 @@ object Api {
 
     suspend fun weakCards(limit: UInt = 20u): JSONObject =
         call("weakCards", mapOf("limit" to limit))
+
+    suspend fun quizPlan(): JSONObject = call("quizPlan")
+
+    suspend fun reviewConfig(): JSONObject = call("reviewConfig")
+
+    suspend fun setReviewConfig(configJson: String): JSONObject =
+        call("setReviewConfig", mapOf("configJson" to configJson))
 
     suspend fun answer(cardId: String): JSONObject = call("answer", mapOf("cardId" to cardId))
 

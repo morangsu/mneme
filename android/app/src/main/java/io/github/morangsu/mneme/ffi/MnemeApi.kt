@@ -21,7 +21,10 @@ import io.github.morangsu.mneme.ffi.judge as ffiJudge
 import io.github.morangsu.mneme.ffi.openDatabase as ffiOpenDatabase
 import io.github.morangsu.mneme.ffi.quiz as ffiQuiz
 import io.github.morangsu.mneme.ffi.reverse as ffiReverse
+import io.github.morangsu.mneme.ffi.quizPlan as ffiQuizPlan
 import io.github.morangsu.mneme.ffi.quizQueue as ffiQuizQueue
+import io.github.morangsu.mneme.ffi.reviewConfig as ffiReviewConfig
+import io.github.morangsu.mneme.ffi.setReviewConfig as ffiSetReviewConfig
 import io.github.morangsu.mneme.ffi.review as ffiReview
 import io.github.morangsu.mneme.ffi.suggestGrade as ffiSuggestGrade
 import io.github.morangsu.mneme.ffi.weakCards as ffiWeakCards
@@ -94,4 +97,11 @@ object MnemeApi {
 
     /** 错题本：最近 30 天末尾连错 >=2 次。 */
     fun weakCards(limit: UInt): String = ffiWeakCards(limit)
+
+    /** 按用户配置（review.json）出题，含本轮张数限制。 */
+    fun quizPlan(): String = ffiQuizPlan()
+
+    fun reviewConfig(): String = ffiReviewConfig()
+
+    fun setReviewConfig(configJson: String): String = ffiSetReviewConfig(configJson)
 }

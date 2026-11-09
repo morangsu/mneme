@@ -260,9 +260,34 @@ Idle → Fetch(public/private) → Push(events) → Commit → Done(receipt)
 5 分钟重试队列；连点两张「简单」后，用 root 读事件日志确认**同一次 mutate 里**先是 review 事件、
 紧跟 upsert_entity（mastery 生疏 → 熟悉）。崩溃 0。
 
-**实现状态（A2 已完成）**：`quizQueue`（到期优先+新卡限量+weak 计数）/ `suggestGrade`（纯函数）/ `weakCards`
-已实现并接入复习页（每日队列、建议评分带 ✓、5 分钟会话内重试、薄弱模式入口）；`review()` 复习后自动派生
-掌握度写回实体（手工覆盖 30 天内生效）。`createEntity` / `deleteEntity` / `restoreEntity` / `listDeleted` / `entityHistory` / `undoEdit` / `entityTemplate`（新建表单定义）**已实现并有单测**（A1）；`quizQueue` / `suggestGrade` / `weakCards` / `search` / `parseFields` / `setCredential` 待 A2/A4。`state()` 新增 `kind` 与 `recycle` 两个字段。
+### 复习算法：FSRS-5（A2 已完成）
+
+调度器从「简化 SM-2」换成 **FSRS-5**（open-spaced-repetition 项目的 DSR 模型），并吸收 Anki 的工程约定：
+
+| 项 | 实现 | 依据 |
+| --- | --- | --- |
+| 记忆模型 | S（稳定度，天）/ D（难度 1–10）/ R（当前可回忆概率） | FSRS-5 算法 wiki |
+| 遗忘曲线 | `R(t,S) = (1 + 19/81·t/S)^-0.5`，反解 `I(r,S) = S/(19/81)·(r^-2 − 1)` | 同上（`t=S` 时 R=0.9，即稳定度定义） |
+| 间隔 | 由**期望记忆率**反解，不再乘固定系数 | FSRS-5 |
+| 学习步骤 | 新卡 1 分钟 → 10 分钟 → 毕业进天级（`easy` 直接给 4 天） | Anki 默认牌组选项 |
+| 重学步骤 | 忘记后回到第一档（默认 10 分钟） | Anki relearning steps |
+| 顽固卡 | 累计遗忘 ≥ 8 次标 `leech`，UI 提示「换个记忆线索」 | Anki leech threshold |
+| 同日复习 | 走 FSRS-5 的短时公式 `S′ = S·e^(w17·(G−3+w18))`，不误用长间隔公式 | FSRS-5 |
+
+**用户可调**（`review.json`，越界自动夹回）：每日新卡（默认 10）、每日到期上限（100）、**本轮张数**（默认 20，0=不限）、
+期望记忆率（0.90，范围 0.70–0.97）、学习步骤（1,10 分钟）、顽固卡阈值（8）、最大间隔（3650 天）。
+
+**出题不泄题**：`quizPlan` 的每张卡带 `ask_name`（答案是否为药名，由 `answer_fields` 是否含主键字段判定）。
+答药名的卡（`*_to_name`）UI **不显示实体名**，题干里已含药名时也不重复显示 —— 实测「具有『温热病』的是？」
+下面直接写「桂枝」等于送答案。
+
+**掌握度派生**（`mastery_label_ext`）：均值稳定度 + 遗忘次数 + 最近评分 + **覆盖率**。
+覆盖率不足 80% 时最高只能「熟悉」—— 一味药 13 张卡里只学过 3 张就自称熟练，既不诚实也会让分数来回跳
+（实测「复习一张新卡，熟练掉成熟悉」，用户看到的是「答得好反而降级」）。
+
+**实现状态（A2 已完成）**：`quizPlan`（按 review.json 出题，含本轮张数）/ `quizQueue`（显式参数版）/
+`reviewConfig` / `setReviewConfig` / `suggestGrade` / `weakCards` 已接入复习页；`review()` 复习后自动派生
+掌握度写回实体（手工覆盖 30 天内生效），回执里带「还有 N 张卡没学过」。`createEntity` / `deleteEntity` / `restoreEntity` / `listDeleted` / `entityHistory` / `undoEdit` / `entityTemplate`（新建表单定义）**已实现并有单测**（A1）；`quizQueue` / `suggestGrade` / `weakCards` / `search` / `parseFields` / `setCredential` 待 A2/A4。`state()` 新增 `kind` 与 `recycle` 两个字段。
 
 **兼容性**：只增不改。`view()` 已加 `_id`；`entityDetail` / `editEntity` 保持。
 
@@ -342,7 +367,7 @@ Idle → Fetch(public/private) → Push(events) → Commit → Done(receipt)
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
 | **A1 数据完整性** | 新建/复制为新、删除/回收站/恢复、历史、撤销、`notes`/`supersedes` 字段 | §8 第 1–4 项 |
-| **A2 复习闭环** | 每日队列、自动评分、会话内重试、错题本、掌握度派生 | §8 第 5–8 项 |
+| **A2 复习闭环** | FSRS-5 调度、每日队列、本轮张数可调、自动评分、会话内重试、错题本、掌握度派生 | §8 第 5–8 项 |
 | **A3 录入效率** | 粘贴解析、OCR 草稿、重复检测、导入差异预览 | §8 第 1 项（≤2 分钟） |
 | **A4 安全与检索** | Keystore 凭据、搜索、场景脚本化 | §8 第 9、11、12 项 |
 | **A5 桌面端** | Compose Desktop 骨架 + 复用 A1–A4 的业务层 | 桌面能完成 §8 第 1–12 项 |

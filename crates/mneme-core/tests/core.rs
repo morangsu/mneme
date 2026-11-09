@@ -1,6 +1,7 @@
 use mneme_core::{
     DomainSchema, Entity, InvertedIndex, MergePolicy, ReviewEvent, Sm2Scheduler, SrsState, TermTable,
-    Value, daily_queue, diff_entities, fold_events, generate_cards, mastery_label, merge_events,
+    Value, daily_queue, diff_entities, fold_events, generate_cards, mastery_label,
+    mastery_label_ext, merge_events,
     normalize, schema::TermAliasDef, suggest_grade, weak_cards, three_way,
 };
 
@@ -367,3 +368,17 @@ fn mastery_aggregates_across_entity_cards() {
 }
 
 const DAY: i64 = 86_400_000;
+
+#[test]
+fn mastery_ext_needs_coverage_before_proficient() {
+    // 稳定度够了，但只学过一半角度：不能说熟练（新卡会稀释均值，实测踩过）
+    assert_eq!(mastery_label_ext(12.0, 0, Some(4), 3, 13), "熟悉");
+    assert_eq!(mastery_label_ext(12.0, 0, Some(4), 11, 13), "熟练");
+    // 覆盖够了但最近答错：还是熟悉
+    assert_eq!(mastery_label_ext(12.0, 0, Some(1), 13, 13), "熟悉");
+    // 稳定度不足 / 遗忘两次：直接生疏，不看覆盖率
+    assert_eq!(mastery_label_ext(0.5, 0, Some(4), 13, 13), "生疏");
+    assert_eq!(mastery_label_ext(12.0, 2, Some(4), 13, 13), "生疏");
+    // 没有卡（total=0）按已学完处理，不因除零卡住
+    assert_eq!(mastery_label_ext(12.0, 0, Some(4), 0, 0), "熟练");
+}
