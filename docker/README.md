@@ -46,6 +46,27 @@ docker compose -f docker/compose.yaml run --rm shell
 bash docker/scripts/host-adb.sh docker compose -f docker/compose.yaml run --rm device
 ```
 
+## 能不能在容器里跑安卓模拟器？——不能（本机实测）
+
+| 检查项 | 结果 |
+| --- | --- |
+| 容器内 `/dev/kvm` | **不存在**；`docker run --device=/dev/kvm` 直接报 `no such file or directory` |
+| 容器内 CPU 标志 | 有 `svm`（AMD-V），但没透传设备节点，等于没有 |
+| 宿主 `HypervisorPlatform`（WHPX） | **Disabled** —— 模拟器要的硬件加速没开 |
+| 宿主 `Microsoft-Hyper-V-All` | Disabled；`VirtualMachinePlatform` Enabled（Docker 走 WSL2 后端） |
+| 宿主 `HyperVisorPresent` / VBS | True / 运行中（状态 2）→ AEHD 驱动装不上（与 Hyper-V 互斥） |
+
+结论：
+- **容器内跑模拟器**：没有嵌套虚拟化，软件模拟（`-no-accel`）启动十几分钟、操作卡顿，做不了 UI 回归；
+- **宿主跑模拟器**：可行，但要先开 WHPX（管理员 + 重启），再下 SDK/系统镜像（`dl.google.com` 不通，走
+  `https://mirrors.cloud.tencent.com/AndroidSDK/`，已确认有 `emulator-windows_x64` 与
+  `system-images;android-3x;google_apis;x86_64`，约 2 GB）；
+- **真机**：现在这条链路最省事，`device` 服务直接可用。
+
+顺带试过「桌面端 GUI 在容器里跑」（Xvfb + AWT + Robot 截图）：依赖装得上，但 `java` 起窗口那步会卡死
+（7 分钟无输出，被强杀）。所以桌面端 UI 截图将来应该走 Compose 的**离屏渲染**（`ImageComposeScene`），
+不要指望 X11 窗口。
+
 ## 为什么不把 Android SDK 也塞进镜像
 
 打 APK 需要 `platforms;android-36` + `build-tools` + NDK（约 3–4 GB），而宿主机上的 NDK/Gradle
