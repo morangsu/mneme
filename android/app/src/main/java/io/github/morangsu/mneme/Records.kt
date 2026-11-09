@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -63,6 +64,11 @@ fun CreateEntityDialog(
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var savedId by remember { mutableStateOf<String?>(null) }
+    var pasteOpen by remember { mutableStateOf(false) }
+    // 主键字段由 schema 决定，不能在 UI 里写死 "name"
+    var primaryKey by remember { mutableStateOf("name") }
+    // 查重结果：(id, 名字, 原因)
+    var dups by remember { mutableStateOf<List<Triple<String, String, String>>>(emptyList()) }
     val edits = remember { mutableStateMapOf<String, String>() }
     val scope = rememberCoroutineScope()
 
@@ -76,6 +82,7 @@ fun CreateEntityDialog(
         }
         val arr = d.arrayOrEmpty("fields")
         val primary = d.optString("primary", "name")
+        primaryKey = primary
         var primaryValue = ""
         fields = (0 until arr.length()).mapNotNull { i ->
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
@@ -97,6 +104,26 @@ fun CreateEntityDialog(
             edits[primary] = idHint
         }
         title = if (src != null) "复制为新条目" else "新建条目"
+    }
+
+    // 边填边查重：输入停 350ms 再问一次，避免每敲一个字都过一遍 FFI。
+    // 只提示不拦截 —— 「麻黄」和「麻黄（修订）」可能本来就该并存。
+    LaunchedEffect(edits[primaryKey], primaryKey, kind) {
+        val name = edits[primaryKey].orEmpty().trim()
+        if (name.isEmpty()) {
+            dups = emptyList()
+            return@LaunchedEffect
+        }
+        delay(350)
+        val body = JSONObject().put(primaryKey, name)
+        val r = Api.checkDuplicate(kind, body.toString(), prefill?.optString("id").orEmpty())
+        if (r.err() == null) {
+            val arr = r.arrayOrEmpty("items")
+            dups = (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                Triple(o.optString("id"), o.optString("name"), o.optString("reason"))
+            }
+        }
     }
 
     fun save() {
@@ -169,6 +196,39 @@ fun CreateEntityDialog(
                     Text("已新建：$it", color = MnemeColors.Ok, fontSize = 12.sp)
                 }
 
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GhostButton("粘贴填充", onClick = { pasteOpen = true })
+                    Dim("把教材那一段粘进来，自动对上字段", modifier = Modifier.padding(top = 12.dp))
+                }
+
+                if (dups.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MnemeColors.Warn.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        Text("⚠ 可能重复", color = MnemeColors.Warn, fontSize = 12.sp)
+                        dups.forEach { (id, name, reason) ->
+                            Text(
+                                "· $name（$reason）· 点此处可打开它",
+                                color = MnemeColors.TextDim,
+                                fontSize = 11.sp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSaved(id) }
+                                    .padding(vertical = 2.dp),
+                            )
+                        }
+                        Text(
+                            "确认不是同一味就继续保存；是的话先关掉这个窗口去改那一条。",
+                            color = MnemeColors.TextDim,
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -221,6 +281,18 @@ fun CreateEntityDialog(
                 }
             }
         }
+    }
+
+    if (pasteOpen) {
+        PasteFillDialog(
+            kind = kind,
+            onDismiss = { pasteOpen = false },
+            onApply = { values ->
+                // 只覆盖认出来的字段，其余保持用户已填的内容
+                values.forEach { (k, v) -> edits[k] = v }
+                pasteOpen = false
+            },
+        )
     }
 }
 

@@ -777,6 +777,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -793,6 +797,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 internal interface IntegrityCheckingUniffiLib : Library {
     // Integrity check functions only
     fun uniffi_mneme_ffi_checksum_func_answer(
+): Short
+fun uniffi_mneme_ffi_checksum_func_check_duplicate(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_configure_sync(
 ): Short
@@ -817,6 +823,8 @@ fun uniffi_mneme_ffi_checksum_func_judge(
 fun uniffi_mneme_ffi_checksum_func_list_deleted(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_open_database(
+): Short
+fun uniffi_mneme_ffi_checksum_func_parse_paste(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_quiz(
 ): Short
@@ -905,6 +913,8 @@ internal interface UniffiLib : Library {
     // FFI functions
     fun uniffi_mneme_ffi_fn_func_answer(`cardId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_check_duplicate(`kind`: RustBuffer.ByValue,`fieldsJson`: RustBuffer.ByValue,`excludeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_configure_sync(`configJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_create_entity(`kind`: RustBuffer.ByValue,`fieldsJson`: RustBuffer.ByValue,`idHint`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -928,6 +938,8 @@ fun uniffi_mneme_ffi_fn_func_judge(`cardId`: RustBuffer.ByValue,`input`: RustBuf
 fun uniffi_mneme_ffi_fn_func_list_deleted(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_open_database(`path`: RustBuffer.ByValue,`device`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_parse_paste(`text`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_quiz(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1098,6 +1110,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_answer() != 47563.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mneme_ffi_checksum_func_check_duplicate() != 127.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mneme_ffi_checksum_func_configure_sync() != 38613.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1132,6 +1147,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_open_database() != 12704.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_parse_paste() != 38243.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_quiz() != 42537.toShort()) {
@@ -1454,6 +1472,20 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     
 
         /**
+         * 查重：准备新建/改名时，看库里有没有「其实是同一味药」的条目。
+         *
+         * 返回同名 / 同义名 / 近似名三类候选（已删除的、被替代的旧版不算）。
+         */ fun `checkDuplicate`(`kind`: kotlin.String, `fieldsJson`: kotlin.String, `excludeId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_check_duplicate(
+        FfiConverterString.lower(`kind`),FfiConverterString.lower(`fieldsJson`),FfiConverterString.lower(`excludeId`),_status)
+}
+    )
+    }
+    
+
+        /**
          * 写入 `sync.json` 并立即重建同步引擎，不需要重启 APP。
          *
          * `config_json` 就是 `SyncConfig` 的 JSON（含 `targets` 数组）；凭据允许直接写明文，
@@ -1591,6 +1623,20 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_open_database(
         FfiConverterString.lower(`path`),FfiConverterString.lower(`device`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 把一段中文文本解析成字段（「标签：值」/ 制表符 / 「标签 值」都认）。
+         *
+         * 认不出来的行原样返回，绝不猜 —— 宁可让用户手填一次，也不要填错一栏。
+         */ fun `parsePaste`(`text`: kotlin.String, `kind`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_parse_paste(
+        FfiConverterString.lower(`text`),FfiConverterString.lower(`kind`),_status)
 }
     )
     }

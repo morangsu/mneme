@@ -1,8 +1,8 @@
 use mneme_core::{
     DomainSchema, Entity, InvertedIndex, MergePolicy, ReviewEvent, Sm2Scheduler, SrsState, TermTable,
     Value, daily_queue, diff_entities, fold_events, generate_cards, mastery_label,
-    mastery_label_ext, merge_events,
-    normalize, schema::TermAliasDef, suggest_grade, weak_cards, three_way,
+    mastery_label_ext, merge_events, normalize, parse_paste, find_duplicates,
+    schema::TermAliasDef, suggest_grade, weak_cards, three_way,
 };
 
 fn full_schema() -> DomainSchema {
@@ -381,4 +381,101 @@ fn mastery_ext_needs_coverage_before_proficient() {
     assert_eq!(mastery_label_ext(12.0, 2, Some(4), 13, 13), "生疏");
     // 没有卡（total=0）按已学完处理，不因除零卡住
     assert_eq!(mastery_label_ext(12.0, 0, Some(4), 0, 0), "熟练");
+}
+
+// ---- A3 录入效率：粘贴解析 / 查重 ----
+
+fn materia() -> DomainSchema {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../domains/materia-medica.toml");
+    DomainSchema::from_toml(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn paste_maps_labels_to_fields() {
+    let text = "药名：麻黄\n功效：发汗解表、宣肺平喘\n特点锚：发汗力强";
+    let p = parse_paste(text, &materia(), "herb");
+    assert_eq!(p.fields.get("name").map(String::as_str), Some("麻黄"));
+    assert_eq!(
+        p.fields.get("effects").map(String::as_str),
+        Some("发汗解表、宣肺平喘")
+    );
+    assert_eq!(p.fields.get("features").map(String::as_str), Some("发汗力强"));
+    assert!(p.unknown.is_empty(), "{:?}", p.unknown);
+    // 行号要对得上原文，UI 靠它显示「第 2 行已识别」
+    assert_eq!(p.hits[1].line, 2);
+}
+
+#[test]
+fn paste_accepts_tab_and_abbreviated_labels() {
+    // Excel 复制是制表符；教材常写「性味」而不是「性味归经」
+    let text = "药名\t桂枝\n性味：辛、甘，温\n用量 3-10g";
+    let p = parse_paste(text, &materia(), "herb");
+    assert_eq!(p.fields.get("name").map(String::as_str), Some("桂枝"));
+    assert_eq!(
+        p.fields.get("nature").map(String::as_str),
+        Some("辛、甘，温"),
+        "「性味」应命中「性味归经」：{:?}",
+        p.fields
+    );
+    assert_eq!(p.fields.get("dosage").map(String::as_str), Some("3-10g"));
+}
+
+#[test]
+fn paste_keeps_unknown_lines_and_first_value_wins() {
+    let text = "药名：麻黄\n这段是随手写的备注，没有标签\n功效：发汗\n功效：宣肺";
+    let p = parse_paste(text, &materia(), "herb");
+    assert_eq!(p.fields.get("effects").map(String::as_str), Some("发汗"));
+    assert_eq!(p.unknown, vec!["这段是随手写的备注，没有标签".to_string()]);
+    assert_eq!(p.conflicts.len(), 1);
+    assert!(p.conflicts[0].contains("功效"), "{:?}", p.conflicts);
+}
+
+#[test]
+fn paste_ignores_bullets_and_blank_lines() {
+    let text = "\n- 药名：薄荷\n\n* 功效：疏散风热\n";
+    let p = parse_paste(text, &materia(), "herb");
+    assert_eq!(p.fields.get("name").map(String::as_str), Some("薄荷"));
+    assert_eq!(p.fields.get("effects").map(String::as_str), Some("疏散风热"));
+}
+
+#[test]
+fn duplicates_cover_name_synonym_and_similarity() {
+    let schema = materia();
+    let mut mahuang = Entity::new("麻黄", "herb", "t", 1);
+    mahuang.set("name", Value::Text("麻黄".into()), 1);
+    mahuang.set("synonyms", Value::Tags(vec!["龙沙".into()]), 1);
+
+    let mut guizhi = Entity::new("桂枝", "herb", "t", 1);
+    guizhi.set("name", Value::Text("桂枝".into()), 1);
+
+    let mut gone = Entity::new("麻黄草", "herb", "t", 1);
+    gone.set("name", Value::Text("麻黄草".into()), 1);
+    gone.deleted = true;
+
+    let entities = vec![mahuang, guizhi, gone];
+
+    let mut f = std::collections::BTreeMap::new();
+    f.insert("name".to_string(), "麻黄".to_string());
+    let d = find_duplicates(&schema, &entities, "herb", &f, None);
+    assert_eq!(d[0].id, "麻黄");
+    assert_eq!(d[0].reason, "同名");
+
+    // 撞上别人的别名
+    let mut f2 = std::collections::BTreeMap::new();
+    f2.insert("name".to_string(), "龙沙".to_string());
+    let d2 = find_duplicates(&schema, &entities, "herb", &f2, None);
+    assert_eq!(d2[0].id, "麻黄");
+    assert_eq!(d2[0].reason, "同义名");
+
+    // 近似名（麻黄 vs 麻黄草，但麻黄草已删除 → 不该出现）
+    let mut f3 = std::collections::BTreeMap::new();
+    f3.insert("name".to_string(), "麻黄草".to_string());
+    let d3 = find_duplicates(&schema, &entities, "herb", &f3, None);
+    assert!(d3.iter().all(|x| x.id != "麻黄草"), "已删除的不参与查重：{d3:?}");
+    assert_eq!(d3[0].id, "麻黄");
+
+    // 排除自己（编辑现有条目时不能提示「和自己重复」）
+    let d4 = find_duplicates(&schema, &entities, "herb", &f, Some("麻黄"));
+    assert!(d4.is_empty(), "{d4:?}");
 }

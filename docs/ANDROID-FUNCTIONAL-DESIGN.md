@@ -285,9 +285,38 @@ Idle → Fetch(public/private) → Push(events) → Commit → Done(receipt)
 覆盖率不足 80% 时最高只能「熟悉」—— 一味药 13 张卡里只学过 3 张就自称熟练，既不诚实也会让分数来回跳
 （实测「复习一张新卡，熟练掉成熟悉」，用户看到的是「答得好反而降级」）。
 
-**实现状态（A2 已完成）**：`quizPlan`（按 review.json 出题，含本轮张数）/ `quizQueue`（显式参数版）/
+### 录入效率（A3，已真机验证）
+
+**粘贴填充**：把教材/笔记的一整段粘进来，Rust 侧 `parsePaste` 逐行解析成字段。
+
+| 能认的格式 | 说明 |
+| --- | --- |
+| `标签：值` / `标签:值` / `标签=值` / `标签<TAB>值` | 全角半角冒号、Excel 制表符都吃 |
+| `标签 值`（空格分隔） | 教材里常见的「药名 麻黄」 |
+| 字段 label 或英文 key | 「功效」与 `effects` 等价，导出再贴回来也能对上 |
+| 缩写/扩写 | 「性味」↔「性味归经」靠互相包含匹配（两边长度 ≥2） |
+
+**不猜**：认不出的行原样列在「没认出来（会保留，请手动填）」下面；同一字段出现两次取第一次并提示冲突。
+UI 只覆盖识别到的字段，用户已填的其他格子不动。判定在 core（`mneme-core/src/paste.rs`），服务端与桌面端共用同一套规则。
+
+**查重**：`checkDuplicate` 三条判据 —— 同名（归一化后相同）、同义名（撞上对方的 `synonyms`，或我填的别名里有对方的名字）、近似名（相似度 ≥ 0.8）。
+已删除的不算；编辑自己时传 `excludeId` 不会「和自己重复」。**只提示不拦截** —— 「麻黄」和「麻黄（修订）」本来就该并存。
+输入停 350ms 才查一次（防抖），避免每敲一个字都过一次 FFI。
+
+**真机回执（V2148A）**：新建 → 粘贴填充 → 粘三段（`name:TESTPASTE` / `effects:aaa` / `nature:xxx` + 一行无标签文本）→
+「识别 3 项」逐行显示行号+字段+值、「没认出来 · junk」保留 → 「填入 3 项」→ 表单三格已填 → 保存（实体 7→8、卡片 89→91）。
+再开一次新建、粘贴同名 `TESTPASTE` → 350ms 后出现「⚠ 可能重复 · TESTPASTE（同名）· 点此处可打开它」。崩溃 0。
+
+**A3 未做**：导入前差异预览（`importData` 已有 `dry` 参数，缺「逐条差异」的返回体）、OCR 草稿化（ML Kit 现在只把整段文本回填到导入框）、
+批量粘贴多味药（一次只建一条，多行多条的语法还没定）。
+
+**实现状态（A3）**：`parsePaste`（文本→字段）/ `checkDuplicate`（同名·同义名·近似名）已实现并接入新建对话框，有单测 + 真机回执。
+
+**实现状态（A2）**：`quizPlan`（按 review.json 出题，含本轮张数）/ `quizQueue`（显式参数版）/
 `reviewConfig` / `setReviewConfig` / `suggestGrade` / `weakCards` 已接入复习页；`review()` 复习后自动派生
-掌握度写回实体（手工覆盖 30 天内生效），回执里带「还有 N 张卡没学过」。`createEntity` / `deleteEntity` / `restoreEntity` / `listDeleted` / `entityHistory` / `undoEdit` / `entityTemplate`（新建表单定义）**已实现并有单测**（A1）；`quizQueue` / `suggestGrade` / `weakCards` / `search` / `parseFields` / `setCredential` 待 A2/A4。`state()` 新增 `kind` 与 `recycle` 两个字段。
+掌握度写回实体（手工覆盖 30 天内生效），回执里带「还有 N 张卡没学过」。**实现状态（A1）**：`createEntity` / `deleteEntity` / `restoreEntity` / `listDeleted` / `entityHistory` / `undoEdit` / `entityTemplate`，有单测 + 真机回执。
+
+**待做**：`search` / `setCredential`（A4）、导入差异预览（A3 余项）。FFI 共 **35 个导出**；`state()` 带 `kind` 与 `recycle`。
 
 **兼容性**：只增不改。`view()` 已加 `_id`；`entityDetail` / `editEntity` 保持。
 

@@ -52,6 +52,8 @@ object MnemeApiStub {
         "listDeleted" -> "{\"items\":[]}"
         "entityHistory" -> "{\"items\":[]}"
         "undoEdit" -> JSONObject().put("ok", true).put("rev", 9).put("restored", JSONArray().put("effects")).toString()
+        "parsePaste" -> "{\"fields\":{\"name\":\"示例\"},\"hits\":[],\"unknown\":[],\"conflicts\":[],\"matched\":1}"
+        "checkDuplicate" -> "{\"items\":[]}"
         "editEntity" -> JSONObject()
             .put("ok", true)
             .put("id", args["entityId"] ?: "")
@@ -275,6 +277,14 @@ object MnemeBridge {
                     args["entityId"] as String, args["limit"] as UInt
                 )
                 "undoEdit" -> MnemeApi.undoEdit(args["entityId"] as String)
+                "parsePaste" -> MnemeApi.parsePaste(
+                    args["text"] as String, args["kind"] as String
+                )
+                "checkDuplicate" -> MnemeApi.checkDuplicate(
+                    args["kind"] as String,
+                    args["fieldsJson"] as String,
+                    args["excludeId"] as String,
+                )
                 "configureSync" -> MnemeApi.configureSync(args["configJson"] as String)
                 "importData" -> MnemeApi.importData(
                     args["content"] as String,
@@ -397,6 +407,12 @@ object Api {
 
     suspend fun undoEdit(entityId: String): JSONObject =
         call("undoEdit", mapOf("entityId" to entityId))
+
+    suspend fun parsePaste(text: String, kind: String): JSONObject =
+        call("parsePaste", mapOf("text" to text, "kind" to kind))
+
+    suspend fun checkDuplicate(kind: String, fieldsJson: String, excludeId: String = ""): JSONObject =
+        call("checkDuplicate", mapOf("kind" to kind, "fieldsJson" to fieldsJson, "excludeId" to excludeId))
 
     suspend fun importData(content: String, filename: String, dry: Boolean): JSONObject =
         call("importData", mapOf("content" to content, "filename" to filename, "dry" to dry))

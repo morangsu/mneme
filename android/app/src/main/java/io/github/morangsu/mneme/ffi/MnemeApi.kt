@@ -5,12 +5,14 @@ package io.github.morangsu.mneme.ffi
 // 这里把它们包成 object，让 APP 侧统一以 MnemeApi.xxx() 调用，
 // 也避免业务代码依赖生成文件的内部命名。别名 import 防止与 object 方法同名递归。
 import io.github.morangsu.mneme.ffi.answer as ffiAnswer
+import io.github.morangsu.mneme.ffi.checkDuplicate as ffiCheckDuplicate
 import io.github.morangsu.mneme.ffi.configureSync as ffiConfigureSync
 import io.github.morangsu.mneme.ffi.createEntity as ffiCreateEntity
 import io.github.morangsu.mneme.ffi.deleteEntity as ffiDeleteEntity
 import io.github.morangsu.mneme.ffi.entityHistory as ffiEntityHistory
 import io.github.morangsu.mneme.ffi.entityTemplate as ffiEntityTemplate
 import io.github.morangsu.mneme.ffi.listDeleted as ffiListDeleted
+import io.github.morangsu.mneme.ffi.parsePaste as ffiParsePaste
 import io.github.morangsu.mneme.ffi.restoreEntity as ffiRestoreEntity
 import io.github.morangsu.mneme.ffi.undoEdit as ffiUndoEdit
 import io.github.morangsu.mneme.ffi.editEntity as ffiEditEntity
@@ -87,6 +89,13 @@ object MnemeApi {
     fun listDeleted(): String = ffiListDeleted()
     fun entityHistory(entityId: String, limit: UInt): String = ffiEntityHistory(entityId, limit)
     fun undoEdit(entityId: String): String = ffiUndoEdit(entityId)
+
+    /** 把一段中文文本解析成字段；认不出的行原样返回。 */
+    fun parsePaste(text: String, kind: String): String = ffiParsePaste(text, kind)
+
+    /** 查重：同名 / 同义名 / 近似名；excludeId 传自己时不会「和自己重复」。 */
+    fun checkDuplicate(kind: String, fieldsJson: String, excludeId: String): String =
+        ffiCheckDuplicate(kind, fieldsJson, excludeId)
 
     /** 每日队列：到期优先、新卡限量。 */
     fun quizQueue(newLimit: UInt, dueLimit: UInt): String = ffiQuizQueue(newLimit, dueLimit)

@@ -10,7 +10,8 @@
 use mneme_codec::{self as codec, Format, ImportOptions, ImportStrategy};
 use mneme_core::{
     DomainSchema, Entity, FieldKind, ReviewConfig, ReviewEvent, TermTable, Value, daily_queue,
-    fold_events, generate_choices, judge as judge_answer, mastery_label_ext, now_ms,
+    find_duplicates, fold_events, generate_choices, judge as judge_answer, mastery_label_ext, now_ms,
+    parse_paste as core_parse_paste,
     suggest_grade as core_suggest_grade, weak_cards as core_weak_cards,
 };
 use mneme_store::{Op, Store};
@@ -865,6 +866,48 @@ pub fn edit_entity(entity_id: String, fields_json: String) -> String {
 
 // ---------------------------------------------------------------- 新建 / 删除 / 历史
 
+/// 把一段中文文本解析成字段（「标签：值」/ 制表符 / 「标签 值」都认）。
+///
+/// 认不出来的行原样返回，绝不猜 —— 宁可让用户手填一次，也不要填错一栏。
+#[uniffi::export]
+pub fn parse_paste(text: String, kind: String) -> String {
+    call(|a| {
+        let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
+        let p = core_parse_paste(&text, &schema, &kind);
+        json!({
+            "fields": p.fields,
+            "hits": p.hits.iter().map(|h| json!({
+                "key": h.key, "label": h.label, "value": h.value, "line": h.line,
+            })).collect::<Vec<_>>(),
+            "unknown": p.unknown,
+            "conflicts": p.conflicts,
+            "matched": p.fields.len(),
+        })
+    })
+}
+
+/// 查重：准备新建/改名时，看库里有没有「其实是同一味药」的条目。
+///
+/// 返回同名 / 同义名 / 近似名三类候选（已删除的、被替代的旧版不算）。
+#[uniffi::export]
+pub fn check_duplicate(kind: String, fields_json: String, exclude_id: String) -> String {
+    call(|a| {
+        let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
+        let fields: BTreeMap<String, String> = match serde_json::from_str(&fields_json) {
+            Ok(v) => v,
+            Err(e) => return err(format!("fieldsJson 解析失败: {e}")),
+        };
+        let entities = a.store.read(|m| m.entities_vec());
+        let exclude = if exclude_id.trim().is_empty() { None } else { Some(exclude_id.as_str()) };
+        let items = find_duplicates(&schema, &entities, &kind, &fields, exclude);
+        json!({
+            "items": items.iter().map(|d| json!({
+                "id": d.id, "name": d.name, "reason": d.reason, "score": d.score,
+            })).collect::<Vec<_>>(),
+        })
+    })
+}
+
 /// 空白表单的字段定义（新建用）。与 `entityDetail` 同构，只是值全空。
 #[uniffi::export]
 pub fn entity_template(kind: String) -> String {
@@ -1542,6 +1585,28 @@ mod tests {
             .filter_map(|r| r["_id"].as_str())
             .collect();
         assert_eq!(sup_ids, vec!["测试药"], "被替代视图只应有旧版");
+
+        // ---- A3：粘贴解析 + 查重 ----
+        let pasted = parse_paste("药名：粘贴药\n功效：解表、清热\n性味：苦寒\n随手备注".into(), "herb".into());
+        assert!(pasted.contains("粘贴药"), "{pasted}");
+        assert!(pasted.contains("\"nature\""), "「性味」应命中性味归经：{pasted}");
+        assert!(pasted.contains("随手备注"), "认不出的行要原样留下：{pasted}");
+        assert!(pasted.contains("\"matched\":3"), "{pasted}");
+
+        let dup = check_duplicate(
+            "herb".into(),
+            r#"{"name":"测试药"}"#.into(),
+            "".into(),
+        );
+        assert!(dup.contains("同名"), "{dup}");
+        // 编辑自己时不该提示「和自己重复」（同库里还有「测试药（修订）」，
+        // 那是近似名，允许提示，但绝不能把 exclude 的那条列出来）
+        let dup_self = check_duplicate(
+            "herb".into(),
+            r#"{"name":"测试药"}"#.into(),
+            "测试药".into(),
+        );
+        assert!(!dup_self.contains("\"id\":\"测试药\""), "{dup_self}");
 
         let _ = fs::remove_dir_all(&root);
     }
