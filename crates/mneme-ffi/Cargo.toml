@@ -1,0 +1,21 @@
+[package]
+name = "mneme-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "uniffi 绑定：把 Rust 内核暴露给 Android Compose"
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+name = "mneme_ffi"
+
+[dependencies]
+mneme-core.workspace = true
+mneme-store.workspace = true
+mneme-codec.workspace = true
+mneme-sync.workspace = true
+mneme-upstream.workspace = true
+uniffi.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+tokio.workspace = true

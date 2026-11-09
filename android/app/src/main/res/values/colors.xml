@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 与 Win 端网页一致的深色配色；Compose 侧在 Ui.kt 用同名常量再声明一份 -->
+<resources>
+    <color name="bg">#FF16171A</color>        <!-- 背景 -->
+    <color name="panel">#FF1E2024</color>     <!-- 面板 -->
+    <color name="panel_alt">#FF24272C</color> <!-- 面板次级 / 选中态 -->
+    <color name="text">#FFE6E7EA</color>      <!-- 主文字 -->
+    <color name="text_dim">#FF9A9CA3</color>  <!-- 次要文字 -->
+    <color name="accent">#FF6AA9FF</color>    <!-- 强调 -->
+    <color name="divider">#FF2C2F35</color>   <!-- 分隔线 -->
+    <color name="danger">#FFFF8A80</color>    <!-- 危险 / 不可改 -->
+    <color name="warn">#FFFFCC80</color>      <!-- 提醒 / 原样 -->
+    <color name="ok">#FF81C784</color>        <!-- 成功 / 两者都留 -->
+</resources>

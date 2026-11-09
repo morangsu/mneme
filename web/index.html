@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>mneme · 记忆地基</title>
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+<header>
+  <h1>mneme</h1>
+  <nav>
+    <a href="#" data-tab="matrix" class="on">矩阵</a>
+    <a href="#" data-tab="reverse">反查</a>
+    <a href="#" data-tab="quiz">复习</a>
+    <a href="#" data-tab="data">数据</a>
+  </nav>
+  <span class="muted" id="state"></span>
+</header>
+<main>
+  <div id="banners"></div>
+
+  <section id="tab-matrix">
+    <div class="row" style="margin-bottom:12px">
+      <label class="muted">视图</label>
+      <select id="view"></select>
+      <span class="muted" id="view-note"></span>
+    </div>
+    <div id="table" class="panel">加载中…</div>
+  </section>
+
+  <section id="tab-reverse" hidden>
+    <div class="panel">
+      <h2>给线索，反推药名 / 篇名 / 种名</h2>
+      <div class="row">
+        <input type="text" id="clue" placeholder="功效:宣肺平喘 或 禁忌:表虚自汗，可空格分隔多个" style="flex:1;min-width:260px" />
+        <button class="primary" onclick="doReverse()">反查</button>
+      </div>
+      <p class="muted" style="margin:8px 0 0">字段用 <code>标签:词</code>；多个线索是 AND。候选不唯一时自动带出限定词。</p>
+    </div>
+    <div id="reverse-out"></div>
+  </section>
+
+  <section id="tab-quiz" hidden>
+    <div class="panel">
+      <h2>反向卡</h2>
+      <div id="q" style="font-size:16px;white-space:pre-wrap;min-height:70px">加载中…</div>
+      <div class="row" style="margin-top:12px">
+        <button onclick="reveal()">显示答案</button>
+        <button class="primary" onclick="grade(1)">重来</button>
+        <button onclick="grade(3)">良好</button>
+        <button onclick="grade(4)">简单</button>
+        <span class="muted" id="quiz-stat"></span>
+      </div>
+      <div id="a" class="card" style="display:none;margin-top:12px"></div>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="answer-input" placeholder="输入自己的答案，点判分（支持同义说法）" style="flex:1;min-width:220px" />
+        <button onclick="judgeAnswer()">判分</button>
+        <span class="muted" id="judge-out"></span>
+      </div>
+    </div>
+    <p class="muted">只传复习事件，不传排期状态；回连后用 <code>mneme sync</code> 合并。</p>
+  </section>
+
+  <section id="tab-data" hidden>
+    <div class="panel">
+      <h2>导入导出</h2>
+      <div class="row">
+        <label class="muted">格式</label>
+        <select id="fmt">
+          <option value="bundle">Bundle（带校验和）</option>
+          <option value="json">JSON</option>
+          <option value="csv">CSV</option>
+          <option value="tsv">TSV</option>
+          <option value="md">Markdown</option>
+          <option value="anki">Anki TSV</option>
+          <option value="html">单文件离线包</option>
+        </select>
+        <button onclick="download()">导出下载</button>
+        <input type="file" id="file" accept=".json,.csv,.tsv,.txt" />
+        <button onclick="upload()">导入</button>
+        <label class="muted"><input type="checkbox" id="dry" /> 只预演</label>
+      </div>
+      <pre id="io-out">选择文件后点导入。</pre>
+    </div>
+    <div class="panel">
+      <h2>同步</h2>
+      <div class="row" id="targets"></div>
+      <pre id="sync-out">未执行同步。</pre>
+    </div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

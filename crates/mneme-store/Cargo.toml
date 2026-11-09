@@ -1,0 +1,23 @@
+[package]
+name = "mneme-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "append-only 事件日志、不可变快照、内存索引与分片读写锁"
+
+[features]
+default = ["sqlite"]
+# 本地物化镜像：APP 侧的「真数据库」。可从事件日志随时重建，
+# 不作为同步单元，绝不搬 .sqlite 文件。
+sqlite = ["dep:rusqlite"]
+
+[dependencies]
+rusqlite = { workspace = true, optional = true }
+mneme-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+chrono.workspace = true

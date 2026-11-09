@@ -1,0 +1,30 @@
+[package]
+name = "mneme-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "命令行：init / import / export / query / quiz / sync / bench / verify / serve"
+
+[[bin]]
+name = "mneme"
+path = "src/main.rs"
+
+[features]
+default = []
+# 性能清单 §3：可选替换全局分配器。默认关闭以保证零 C 依赖、可复现构建。
+fast-alloc = ["dep:mimalloc"]
+
+[dependencies]
+mneme-core.workspace = true
+mneme-store.workspace = true
+mneme-codec.workspace = true
+mneme-sync.workspace = true
+mneme-upstream.workspace = true
+mneme-server.workspace = true
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+chrono.workspace = true
+mimalloc = { workspace = true, optional = true }

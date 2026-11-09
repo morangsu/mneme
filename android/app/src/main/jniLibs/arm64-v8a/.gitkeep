@@ -1,0 +1,1 @@
+将 Rust 编译产物 libmneme_ffi.so 放在本目录（其余 ABI 如 x86_64 另建同级目录）。生成方式见 android/README.md 第 4 节。

@@ -1,0 +1,37 @@
+# 默认不锁 CPU 指令集：保证同一份二进制在同代机器间可移植、构建可复现。
+# 需要榨干本机（AVX2/SIMD）时显式启用，并只用同环境对照组比较：
+#   RUSTFLAGS="-C target-cpu=native" cargo build --release
+# PowerShell:
+#   $env:RUSTFLAGS="-C target-cpu=native"; cargo build --release
+#
+# PGO（可选，进阶）：
+#   RUSTFLAGS="-Cprofile-generate=./pgo" cargo build --release
+#   ./target/release/mneme bench --entities 20000
+#   llvm-profdata merge -o ./pgo/merged.profdata ./pgo
+#   RUSTFLAGS="-Cprofile-use=./pgo/merged.profdata" cargo build --release
+
+# 依赖源跟随全局 ~/.cargo/config.toml（已修为官方 sparse）。
+# 若换机器遇到源不可用，检查全局配置里是否有过期的 git:// 镜像替换。
+[registries.crates-io]
+protocol = "sparse"
+
+# ---- Android 交叉编译（aarch64）----
+# 本机 NDK: D:\scoop\apps\android-ndk\current (r30)。
+# 换机器时把下面 4 条路径改成自己的 $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/<host>/bin/。
+# 说明：NDK 自带的 aarch64-linux-android26-clang 在 Windows 上是 .cmd 批处理，
+# rustc/cc 用 CreateProcess 直接调不起来，所以这里统一用 clang.exe + 显式 --target。
+# 若装了 cargo-ndk（cargo install cargo-ndk），可完全忽略本节，直接：
+#   cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build --release -p mneme-ffi
+[target.aarch64-linux-android]
+linker = "D:/scoop/apps/android-ndk/current/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe"
+rustflags = ["-Clink-arg=--target=aarch64-linux-android26"]
+
+[env]
+# rusqlite(bundled) / ring 等含 C 代码的依赖靠这两个变量选交叉编译器
+CC_aarch64_linux_android = "D:/scoop/apps/android-ndk/current/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe"
+CFLAGS_aarch64_linux_android = "--target=aarch64-linux-android26"
+AR_aarch64_linux_android = "D:/scoop/apps/android-ndk/current/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+
+[alias]
+xtest = "test --workspace --all-targets"
+xbench = "bench --workspace"

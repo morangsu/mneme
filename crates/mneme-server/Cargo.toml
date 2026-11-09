@@ -1,0 +1,19 @@
+[package]
+name = "mneme-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "axum HTTP API + 内嵌静态前端，单二进制分发"
+
+[dependencies]
+mneme-core.workspace = true
+mneme-store.workspace = true
+mneme-codec.workspace = true
+mneme-sync.workspace = true
+mneme-upstream.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true

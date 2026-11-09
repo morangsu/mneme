@@ -1,0 +1,27 @@
+/target
+**/*.rs.bk
+/data
+/snapshots
+/backups
+/events
+*.sqlite
+*.sqlite-*
+auth.txt
+.env
+*.task.json
+pgo/
+
+# 公共数据仓库 mneme-data 的本地克隆，不进本仓库
+# 首次使用：git clone https://github.com/morangsu/mneme-data domains
+/domains
+
+# ---- Android ----
+android/.gradle/
+android/.kotlin/
+android/.idea/
+android/build/
+android/app/build/
+# 含本机 sdk.dir，不能提交（注意：gitignore 不支持行内注释，注释必须单独一行）
+android/local.properties
+# 由 cargo build --target aarch64-linux-android 生成，不进仓库
+android/app/src/main/jniLibs/*/lib*.so

@@ -1,0 +1,24 @@
+[package]
+name = "mneme-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "可插拔同步：SyncTarget trait + WebDAV / GitHub / Git / S3 / LocalDir + 412 自愈引擎"
+
+[dependencies]
+mneme-core.workspace = true
+mneme-store.workspace = true
+mneme-codec.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+sha2.workspace = true
+hex.workspace = true
+hmac.workspace = true
+base64.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+flate2.workspace = true

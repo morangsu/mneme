@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">mneme 记忆</string>
+
+    <!-- 底部导航 -->
+    <string name="tab_matrix">矩阵</string>
+    <string name="tab_reverse">反查</string>
+    <string name="tab_quiz">复习</string>
+    <string name="tab_sync">同步</string>
+    <string name="tab_conflict">冲突</string>
+
+    <!-- 通用 -->
+    <string name="loading">加载中…</string>
+    <string name="retry">重试</string>
+    <string name="confirm">提交</string>
+    <string name="all_by_suggestion">全部按建议</string>
+    <string name="show_answer">显示答案</string>
+    <string name="judge">判分</string>
+    <string name="sync_now">立即同步</string>
+    <string name="sync_dry">仅预演</string>
+    <string name="pull_public">拉取公共基础库</string>
+</resources>

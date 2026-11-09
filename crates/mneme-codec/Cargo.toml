@@ -1,0 +1,16 @@
+[package]
+name = "mneme-codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "导入导出：JSON / CSV / TSV / Markdown / Anki TSV / Bundle / 离线 HTML"
+
+[dependencies]
+mneme-core.workspace = true
+mneme-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
