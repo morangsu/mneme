@@ -53,6 +53,10 @@ fun EntityEditorDialog(
 ) {
     var title by remember { mutableStateOf("编辑") }
     var subtitle by remember { mutableStateOf("") }
+    // 所属分组：显示路径（章 / 节 / 群），点一下就能换
+    var groupId by remember { mutableStateOf("") }
+    var groupPath by remember { mutableStateOf("") }
+    var pickGroup by remember { mutableStateOf(false) }
     var fields by remember { mutableStateOf<List<FieldDef>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var result by remember { mutableStateOf<JSONObject?>(null) }
@@ -79,6 +83,8 @@ fun EntityEditorDialog(
         detail = d
         title = d.optString("title", "编辑").ifBlank { "编辑" }
         subtitle = "rev ${d.optInt("rev")} · ${d.optString("kind")}"
+        groupId = d.optString("group_id")
+        groupPath = d.optString("group_path")
         val arr = d.arrayOrEmpty("fields")
         val list = (0 until arr.length()).mapNotNull { i ->
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
@@ -153,6 +159,20 @@ fun EntityEditorDialog(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(subtitle, color = MnemeColors.TextDim, fontSize = 11.sp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { pickGroup = true }
+                        .padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text("分组：", color = MnemeColors.TextDim, fontSize = 11.sp)
+                    Text(
+                        groupPath.ifBlank { "未分组" },
+                        color = MnemeColors.Accent,
+                        fontSize = 11.sp,
+                    )
+                }
                     }
                     Text(
                         "关闭",
@@ -294,6 +314,25 @@ fun EntityEditorDialog(
                 }
             }
         }
+    }
+
+    if (pickGroup) {
+        GroupPickerDialog(
+            currentGroupId = groupId,
+            onDismiss = { pickGroup = false },
+            onPick = { gid ->
+                pickGroup = false
+                scope.launch {
+                    val r = Api.setEntityGroup(entityId, gid)
+                    if (r.err() != null) {
+                        error = r.err()
+                    } else {
+                        loadDetail()
+                        onSaved()
+                    }
+                }
+            },
+        )
     }
 
     if (showHistory) {

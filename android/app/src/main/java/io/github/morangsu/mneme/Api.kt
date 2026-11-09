@@ -55,6 +55,10 @@ object MnemeApiStub {
         "parsePaste" -> "{\"fields\":{\"name\":\"示例\"},\"hits\":[],\"unknown\":[],\"conflicts\":[],\"matched\":1}"
         "checkDuplicate" -> "{\"items\":[]}"
         "previewImport" -> "{\"format\":\"csv\",\"total\":0,\"create\":0,\"update\":0,\"same\":0,\"items\":[],\"warnings\":[]}"
+        "listGroups" -> "{\"items\":[],\"unassigned\":0,\"total\":0}"
+        "upsertGroup" -> "{\"ok\":true,\"id\":\"\",\"name\":\"\"}"
+        "deleteGroup" -> "{\"ok\":true,\"reparented\":0,\"unassigned\":0}"
+        "setEntityGroup" -> "{\"ok\":true,\"group_id\":\"\"}"
         "parsePasteMany" -> "{\"blocks\":[],\"count\":0,\"skipped_blocks\":0,\"primary\":\"name\"}"
         "createEntities" -> "{\"ok\":true,\"created\":[],\"skipped\":[],\"failed\":[]}"
         "editEntity" -> JSONObject()
@@ -283,6 +287,14 @@ object MnemeBridge {
                 "parsePaste" -> MnemeApi.parsePaste(
                     args["text"] as String, args["kind"] as String
                 )
+                "listGroups" -> MnemeApi.listGroups()
+                "upsertGroup" -> MnemeApi.upsertGroup(
+                    args["id"] as String, args["name"] as String, args["parent"] as String
+                )
+                "deleteGroup" -> MnemeApi.deleteGroup(args["groupId"] as String)
+                "setEntityGroup" -> MnemeApi.setEntityGroup(
+                    args["entityId"] as String, args["groupId"] as String
+                )
                 "parsePasteMany" -> MnemeApi.parsePasteMany(
                     args["text"] as String, args["kind"] as String
                 )
@@ -422,6 +434,17 @@ object Api {
 
     suspend fun parsePaste(text: String, kind: String): JSONObject =
         call("parsePaste", mapOf("text" to text, "kind" to kind))
+
+    suspend fun listGroups(): JSONObject = call("listGroups")
+
+    suspend fun upsertGroup(id: String, name: String, parent: String = ""): JSONObject =
+        call("upsertGroup", mapOf("id" to id, "name" to name, "parent" to parent))
+
+    suspend fun deleteGroup(groupId: String): JSONObject =
+        call("deleteGroup", mapOf("groupId" to groupId))
+
+    suspend fun setEntityGroup(entityId: String, groupId: String): JSONObject =
+        call("setEntityGroup", mapOf("entityId" to entityId, "groupId" to groupId))
 
     suspend fun parsePasteMany(text: String, kind: String): JSONObject =
         call("parsePasteMany", mapOf("text" to text, "kind" to kind))

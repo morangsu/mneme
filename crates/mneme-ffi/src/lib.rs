@@ -259,7 +259,13 @@ pub fn view(id: String) -> String {
         let Some(v) = schema.views.iter().find(|x| x.id == id).cloned() else {
             return err(format!("未知视图 {id}"));
         };
-        let (entities, index) = a.store.read(|m| (m.entities_vec(), m.entities_vec()));
+        let (entities, index, groups) = a.store.read(|m| {
+            (
+                m.entities_vec(),
+                m.entities_vec(),
+                m.groups.values().cloned().collect::<Vec<_>>(),
+            )
+        });
         let _ = index;
         let kind = schema.entities.first().map(|e| e.kind.as_str()).unwrap_or("");
         let primary = schema
@@ -300,6 +306,9 @@ pub fn view(id: String) -> String {
             });
         }
         let group_key = v.group_by.clone().unwrap_or_default();
+        // 分组路径：优先用实体挂的 Group（支持多级），没挂才退回 group_name 文本。
+        // 这样老数据（只有字符串分组）不会因为引入分组树而失去分组。
+        let tree = mneme_core::group_tree(&groups);
         let rows: Vec<Json> = list
             .iter()
             .map(|e| {
@@ -310,12 +319,36 @@ pub fn view(id: String) -> String {
                     row.insert(c.clone(), json!(e.get(c).map(|x| x.display()).unwrap_or_default()));
                 }
                 if !group_key.is_empty() {
-                    row.insert("_group".into(), json!(e.get(&group_key).map(|x| x.display()).unwrap_or_default()));
+                    let node = e
+                        .group_id
+                        .as_deref()
+                        .and_then(|gid| tree.iter().find(|n| n.id == gid));
+                    match node {
+                        Some(n) => {
+                            row.insert("_group".into(), json!(n.display_path()));
+                            row.insert("_group_path".into(), json!(n.path_names));
+                            row.insert("_group_id".into(), json!(n.id));
+                            row.insert("_group_depth".into(), json!(n.depth));
+                        }
+                        None => {
+                            let text = e.get(&group_key).map(|x| x.display()).unwrap_or_default();
+                            row.insert("_group".into(), json!(text));
+                            if !text.is_empty() {
+                                row.insert("_group_path".into(), json!([text]));
+                            }
+                            row.insert("_group_id".into(), json!(""));
+                            row.insert("_group_depth".into(), json!(0));
+                        }
+                    }
                 }
                 Json::Object(row)
             })
             .collect();
-        json!({ "columns": columns, "primary": primary, "hidden": v.hidden, "group_by": v.group_by, "rows": rows })
+        json!({
+            "columns": columns, "primary": primary, "hidden": v.hidden,
+            "group_by": v.group_by, "rows": rows,
+            "group_count": tree.len(),
+        })
     })
 }
 
@@ -739,6 +772,14 @@ pub fn entity_detail(entity_id: String) -> String {
                     .collect()
             })
             .unwrap_or_default();
+        // 分组信息一起下发：编辑面板要显示「属于哪个分组」并能改，
+        // 否则用户只能从矩阵页的树里猜自己在哪一层。
+        let groups: Vec<mneme_core::Group> = a.store.read(|m| m.groups.values().cloned().collect());
+        let group_path = e
+            .group_id
+            .as_deref()
+            .map(|gid| mneme_core::path_names(&groups, gid).join(" / "))
+            .unwrap_or_default();
         json!({
             "id": e.id,
             "kind": e.kind,
@@ -747,6 +788,8 @@ pub fn entity_detail(entity_id: String) -> String {
             "rev": e.rev,
             "updated_at": e.updated_at,
             "device": e.device,
+            "group_id": e.group_id.clone().unwrap_or_default(),
+            "group_path": group_path,
             "fields": fields,
         })
     })
@@ -1245,6 +1288,227 @@ pub fn list_deleted() -> String {
                 .collect()
         });
         json!({ "items": items })
+    })
+}
+
+// ---------------------------------------------------------------- 分组（多级）
+
+/// 分组树（含每组的实体数与名称路径），供矩阵页与管理面板使用。
+#[uniffi::export]
+pub fn list_groups() -> String {
+    call(|a| {
+        let (groups, entities) = a.store.read(|m| {
+            (m.groups.values().cloned().collect::<Vec<_>>(), m.entities_vec())
+        });
+        let tree = mneme_core::group_tree(&groups);
+        let items: Vec<Json> = tree
+            .iter()
+            .map(|n| {
+                let count = entities
+                    .iter()
+                    .filter(|e| !e.deleted && e.group_id.as_deref() == Some(n.id.as_str()))
+                    .count();
+                json!({
+                    "id": n.id, "name": n.name, "parent": n.parent,
+                    "depth": n.depth, "path": n.display_path(),
+                    "path_names": n.path_names, "path_ids": n.path_ids,
+                    "entities": count,
+                })
+            })
+            .collect();
+        let unassigned = entities
+            .iter()
+            .filter(|e| !e.deleted && e.group_id.as_deref().map(|g| !tree.iter().any(|n| n.id == g)).unwrap_or(true))
+            .count();
+        json!({ "items": items, "unassigned": unassigned, "total": tree.len() })
+    })
+}
+
+/// 新建 / 重命名 / 改上级。`id` 为空表示新建（用名称当 id）。
+///
+/// 三条硬约束：名称不能空、不能成环、层级不超过 `MAX_DEPTH`。
+/// 改名会同步所有成员的 `group_name` 文本字段，避免「树里叫新名、表格里还是旧名」。
+#[uniffi::export]
+pub fn upsert_group(id: String, name: String, parent: String) -> String {
+    call(|a| {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return err("分组名不能为空");
+        }
+        let groups: Vec<mneme_core::Group> = a.store.read(|m| m.groups.values().cloned().collect());
+        let id = if id.trim().is_empty() { name.clone() } else { id.trim().to_string() };
+        let parent = {
+            let p = parent.trim();
+            if p.is_empty() { None } else { Some(p.to_string()) }
+        };
+        let existing = groups.iter().find(|g| g.id == id).cloned();
+
+        if let Some(p) = parent.as_deref() {
+            if !groups.iter().any(|g| g.id == p && !g.deleted) {
+                return err(format!("上级分组不存在：{p}"));
+            }
+            if mneme_core::would_cycle(&groups, &id, Some(p)) {
+                return err("不能把分组挂到自己的下级里");
+            }
+            let depth = mneme_core::path_names(&groups, p).len();
+            if depth >= mneme_core::MAX_DEPTH {
+                return err(format!("最多 {0} 层，不能再往下了", mneme_core::MAX_DEPTH));
+            }
+        }
+        if existing.as_ref().map(|g| g.deleted).unwrap_or(false) {
+            // 同名分组在回收里：直接复活，别让用户卡在「名字被占用」
+        } else if existing.is_none() {
+            // 新建时 id 可能与某条实体撞车？不冲突（不同命名空间），无需检查
+        }
+
+        let now = now_ms();
+        let device = a.store.device().to_string();
+        let mut ops: Vec<Op> = Vec::new();
+        let base_rev = a.store.stats().rev;
+        let mut rev = base_rev + 1;
+        let renamed = existing.as_ref().map(|g| g.name != name).unwrap_or(false);
+
+        let group = mneme_core::Group {
+            id: id.clone(),
+            kind: "group".into(),
+            name: name.clone(),
+            parent: parent.clone(),
+            common: existing.as_ref().map(|g| g.common.clone()).unwrap_or_default(),
+            rev,
+            updated_at: now,
+            device: device.clone(),
+            deleted: false,
+        };
+        ops.push(Op::UpsertGroup { group });
+
+        if renamed {
+            // 同步成员的 group_name 文本（老视图与导出都读这个字段）
+            let members: Vec<Entity> = a
+                .store
+                .read(|m| {
+                    m.entities_vec()
+                        .into_iter()
+                        .filter(|e| e.group_id.as_deref() == Some(id.as_str()))
+                        .collect()
+                });
+            for mut e in members {
+                e.set("group_name", Value::Text(name.clone()), now);
+                rev += 1;
+                e.rev = rev;
+                e.updated_at = now;
+                e.device = device.clone();
+                ops.push(Op::UpsertEntity { entity: e });
+            }
+        }
+
+        match a.store.mutate(&ops) {
+            Ok(_) => json!({ "ok": true, "id": id, "name": name, "parent": parent }),
+            Err(e) => err(e),
+        }
+    })
+}
+
+/// 删除分组：子分组上移到它的父级，成员变「未分组」（并把 `group_name` 清空）。
+///
+/// 不做物理删除 —— 写 `deleted = true` 的墓碑，与实体删除同一套语义。
+#[uniffi::export]
+pub fn delete_group(group_id: String) -> String {
+    call(|a| {
+        let (groups, entities) = a.store.read(|m| {
+            (m.groups.values().cloned().collect::<Vec<_>>(), m.entities_vec())
+        });
+        let Some(target) = groups.iter().find(|g| g.id == group_id && !g.deleted).cloned() else {
+            return err(format!("分组不存在：{group_id}"));
+        };
+        let now = now_ms();
+        let device = a.store.device().to_string();
+        let base_rev = a.store.stats().rev;
+        let mut rev = base_rev;
+        let mut ops: Vec<Op> = Vec::new();
+
+        let children: Vec<mneme_core::Group> = groups
+            .iter()
+            .filter(|g| !g.deleted && g.parent.as_deref() == Some(group_id.as_str()))
+            .cloned()
+            .collect();
+        for mut c in children.clone() {
+            c.parent = target.parent.clone();
+            rev += 1;
+            c.rev = rev;
+            c.updated_at = now;
+            c.device = device.clone();
+            ops.push(Op::UpsertGroup { group: c.clone() });
+        }
+
+        let members: Vec<Entity> = entities
+            .into_iter()
+            .filter(|e| e.group_id.as_deref() == Some(group_id.as_str()))
+            .collect();
+        for mut e in members.clone() {
+            e.group_id = None;
+            if e.get("group_name").is_some() {
+                e.set("group_name", Value::Text(String::new()), now);
+            }
+            rev += 1;
+            e.rev = rev;
+            e.updated_at = now;
+            e.device = device.clone();
+            ops.push(Op::UpsertEntity { entity: e.clone() });
+        }
+
+        rev += 1;
+        let mut tomb = target.clone();
+        tomb.deleted = true;
+        tomb.rev = rev;
+        tomb.updated_at = now;
+        tomb.device = device;
+        ops.push(Op::UpsertGroup { group: tomb });
+
+        match a.store.mutate(&ops) {
+            Ok(_) => json!({
+                "ok": true, "id": group_id,
+                "reparented": children.len(), "unassigned": members.len(),
+            }),
+            Err(e) => err(e),
+        }
+    })
+}
+
+/// 把实体挂到分组（`group_id` 为空表示移出分组）。
+#[uniffi::export]
+pub fn set_entity_group(entity_id: String, group_id: String) -> String {
+    call(|a| {
+        let Some(mut e) = a.store.read(|m| m.entities.get(&entity_id).cloned()) else {
+            return err(format!("实体不存在：{entity_id}"));
+        };
+        if e.deleted {
+            return err("这条在回收站里，先恢复再分组");
+        }
+        let gid = group_id.trim();
+        let now = now_ms();
+        let device = a.store.device().to_string();
+        let label = if gid.is_empty() {
+            e.group_id = None;
+            String::new()
+        } else {
+            let groups: Vec<mneme_core::Group> =
+                a.store.read(|m| m.groups.values().cloned().collect());
+            let Some(g) = groups.iter().find(|g| g.id == gid && !g.deleted) else {
+                return err(format!("分组不存在：{gid}"));
+            };
+            e.group_id = Some(g.id.clone());
+            g.name.clone()
+        };
+        if e.get("group_name").is_some() {
+            e.set("group_name", Value::Text(label.clone()), now);
+        }
+        e.rev = a.store.stats().rev + 1;
+        e.updated_at = now;
+        e.device = device;
+        match a.store.mutate(&[Op::UpsertEntity { entity: e }]) {
+            Ok(_) => json!({ "ok": true, "id": entity_id, "group_id": gid, "group_name": label }),
+            Err(e) => err(e),
+        }
     })
 }
 
@@ -1785,6 +2049,43 @@ mod tests {
         assert_eq!(bj["skipped"].as_array().unwrap().len(), 1, "{batch}");
         assert!(bj["skipped"][0]["reason"].as_str().unwrap().contains("已存在"), "{batch}");
         assert!(entity_detail("A药".into()).contains("功效一"), "批量里第一条要真的落库");
+
+        // ---- 多级分组：建树 → 挂实体 → 视图带路径 → 删父级后子级上移 ----
+        let g1 = upsert_group("".into(), "解表药".into(), "".into());
+        assert!(g1.contains("\"ok\":true"), "{g1}");
+        let g1_id = serde_json::from_str::<Json>(&g1).unwrap()["id"].as_str().unwrap().to_string();
+        let g2 = upsert_group("".into(), "发散风寒药".into(), g1_id.clone());
+        assert!(g2.contains("\"ok\":true"), "{g2}");
+        let g2_id = serde_json::from_str::<Json>(&g2).unwrap()["id"].as_str().unwrap().to_string();
+
+        // 层级约束：把父级挂到自己子级下面必须被拒
+        let cycle = upsert_group(g1_id.clone(), "解表药".into(), g2_id.clone());
+        assert!(cycle.contains("自己的下级"), "循环检测应报错：{cycle}");
+
+        let assigned = set_entity_group("A药".into(), g2_id.clone());
+        assert!(assigned.contains("\"ok\":true"), "{assigned}");
+        assert!(assigned.contains("发散风寒药"), "group_name 要跟着同步：{assigned}");
+
+        let groups = list_groups();
+        assert!(groups.contains("解表药 / 发散风寒药"), "{groups}");
+        assert!(groups.contains("\"entities\":1"), "分组要统计成员数：{groups}");
+
+        let matrix: Json = serde_json::from_str(&view("matrix".into())).unwrap();
+        let row = matrix["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["_id"] == "A药")
+            .unwrap();
+        assert_eq!(row["_group"], "解表药 / 发散风寒药", "{row}");
+        assert_eq!(row["_group_depth"], 1);
+
+        // 删父级：子级上移到顶层，成员变未分组
+        let del = delete_group(g1_id.clone());
+        assert!(del.contains("\"reparented\":1"), "{del}");
+        let after = list_groups();
+        assert!(after.contains("\"depth\":0"), "子级应升为顶层：{after}");
+        assert!(!after.contains("解表药 / 发散风寒药"), "路径里不该再有已删父级：{after}");
 
         let _ = fs::remove_dir_all(&root);
     }

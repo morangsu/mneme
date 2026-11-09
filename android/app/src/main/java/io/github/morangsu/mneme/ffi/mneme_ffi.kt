@@ -787,6 +787,14 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -814,6 +822,8 @@ fun uniffi_mneme_ffi_checksum_func_create_entity(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_delete_entity(
 ): Short
+fun uniffi_mneme_ffi_checksum_func_delete_group(
+): Short
 fun uniffi_mneme_ffi_checksum_func_edit_entity(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_entity_detail(
@@ -829,6 +839,8 @@ fun uniffi_mneme_ffi_checksum_func_import_data(
 fun uniffi_mneme_ffi_checksum_func_judge(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_list_deleted(
+): Short
+fun uniffi_mneme_ffi_checksum_func_list_groups(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_open_database(
 ): Short
@@ -852,6 +864,8 @@ fun uniffi_mneme_ffi_checksum_func_review(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_review_config(
 ): Short
+fun uniffi_mneme_ffi_checksum_func_set_entity_group(
+): Short
 fun uniffi_mneme_ffi_checksum_func_set_review_config(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_set_schema(
@@ -863,6 +877,8 @@ fun uniffi_mneme_ffi_checksum_func_suggest_grade(
 fun uniffi_mneme_ffi_checksum_func_sync(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_undo_edit(
+): Short
+fun uniffi_mneme_ffi_checksum_func_upsert_group(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_upstream_adopt(
 ): Short
@@ -935,6 +951,8 @@ fun uniffi_mneme_ffi_fn_func_create_entity(`kind`: RustBuffer.ByValue,`fieldsJso
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_delete_entity(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_delete_group(`groupId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_edit_entity(`entityId`: RustBuffer.ByValue,`fieldsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_entity_detail(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -950,6 +968,8 @@ fun uniffi_mneme_ffi_fn_func_import_data(`content`: RustBuffer.ByValue,`filename
 fun uniffi_mneme_ffi_fn_func_judge(`cardId`: RustBuffer.ByValue,`input`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_list_deleted(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_list_groups(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_open_database(`path`: RustBuffer.ByValue,`device`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -973,6 +993,8 @@ fun uniffi_mneme_ffi_fn_func_review(`cardId`: RustBuffer.ByValue,`grade`: Byte,u
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_review_config(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_set_entity_group(`entityId`: RustBuffer.ByValue,`groupId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_set_review_config(`configJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_set_schema(`toml`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -984,6 +1006,8 @@ fun uniffi_mneme_ffi_fn_func_suggest_grade(`correct`: Byte,`elapsedMs`: Long,`sc
 fun uniffi_mneme_ffi_fn_func_sync(`targetId`: RustBuffer.ByValue,`dry`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_undo_edit(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_upsert_group(`id`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,`parent`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_upstream_adopt(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1143,6 +1167,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_delete_entity() != 63764.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mneme_ffi_checksum_func_delete_group() != 22200.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mneme_ffi_checksum_func_edit_entity() != 57919.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1165,6 +1192,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_list_deleted() != 21048.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_list_groups() != 53189.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_open_database() != 12704.toShort()) {
@@ -1200,6 +1230,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_review_config() != 10871.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mneme_ffi_checksum_func_set_entity_group() != 62466.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mneme_ffi_checksum_func_set_review_config() != 31577.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1216,6 +1249,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_undo_edit() != 6202.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_upsert_group() != 37173.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_upstream_adopt() != 8626.toShort()) {
@@ -1570,6 +1606,20 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     
 
         /**
+         * 删除分组：子分组上移到它的父级，成员变「未分组」（并把 `group_name` 清空）。
+         *
+         * 不做物理删除 —— 写 `deleted = true` 的墓碑，与实体删除同一套语义。
+         */ fun `deleteGroup`(`groupId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_delete_group(
+        FfiConverterString.lower(`groupId`),_status)
+}
+    )
+    }
+    
+
+        /**
          * 批量改一条实体的字段。`fields_json` 形如 `{"effects":"a|b","dosage":"3-10g"}`。
          *
          * - `immutable` 字段一律拒改（性味归经、用量、配伍禁忌这类「原样字段」），
@@ -1655,6 +1705,18 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_list_deleted(
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * 分组树（含每组的实体数与名称路径），供矩阵页与管理面板使用。
+         */ fun `listGroups`(): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_list_groups(
         _status)
 }
     )
@@ -1790,6 +1852,18 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     
 
         /**
+         * 把实体挂到分组（`group_id` 为空表示移出分组）。
+         */ fun `setEntityGroup`(`entityId`: kotlin.String, `groupId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_set_entity_group(
+        FfiConverterString.lower(`entityId`),FfiConverterString.lower(`groupId`),_status)
+}
+    )
+    }
+    
+
+        /**
          * 写入复习参数：越界值自动夹回合理区间，并落盘到 `review.json`。
          */ fun `setReviewConfig`(`configJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
@@ -1848,6 +1922,21 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_undo_edit(
         FfiConverterString.lower(`entityId`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 新建 / 重命名 / 改上级。`id` 为空表示新建（用名称当 id）。
+         *
+         * 三条硬约束：名称不能空、不能成环、层级不超过 `MAX_DEPTH`。
+         * 改名会同步所有成员的 `group_name` 文本字段，避免「树里叫新名、表格里还是旧名」。
+         */ fun `upsertGroup`(`id`: kotlin.String, `name`: kotlin.String, `parent`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_upsert_group(
+        FfiConverterString.lower(`id`),FfiConverterString.lower(`name`),FfiConverterString.lower(`parent`),_status)
 }
     )
     }

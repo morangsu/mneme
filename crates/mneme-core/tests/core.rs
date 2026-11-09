@@ -2,6 +2,7 @@ use mneme_core::{
     DomainSchema, Entity, InvertedIndex, MergePolicy, ReviewEvent, Sm2Scheduler, SrsState, TermTable,
     Value, daily_queue, diff_entities, fold_events, generate_cards, mastery_label,
     mastery_label_ext, merge_events, normalize, parse_paste, parse_paste_batch, find_duplicates,
+    group_tree, would_cycle, path_names,
     schema::TermAliasDef, suggest_grade, weak_cards, three_way,
 };
 
@@ -508,4 +509,74 @@ fn paste_batch_single_block_works() {
     assert_eq!(b.blocks.len(), 1);
     assert_eq!(b.blocks[0].fields.get("name").map(String::as_str), Some("麻黄"));
     assert_eq!(b.skipped_blocks, 0);
+}
+
+// ---- 多级分组 ----
+
+fn grp(id: &str, name: &str, parent: Option<&str>) -> mneme_core::Group {
+    mneme_core::Group {
+        id: id.into(),
+        kind: "group".into(),
+        name: name.into(),
+        parent: parent.map(|s| s.into()),
+        common: Default::default(),
+        rev: 1,
+        updated_at: 1,
+        device: "t".into(),
+        deleted: false,
+    }
+}
+
+#[test]
+fn group_tree_orders_roots_then_children() {
+    let groups = vec![
+        grp("g2", "发散风寒药", Some("g1")),
+        grp("g1", "解表药", None),
+        grp("g3", "发散风热药", Some("g1")),
+        grp("g4", "清热药", None),
+    ];
+    let tree = group_tree(&groups);
+    let ids: Vec<&str> = tree.iter().map(|n| n.id.as_str()).collect();
+    // 同级按名称排序（中文按 Unicode 码点，所以「清热药」会排在「解表药」前）——
+    // 这里只断言结构：根都在 depth 0，子节点紧跟在父节点之后
+    assert_eq!(tree.iter().find(|n| n.id == "g1").unwrap().depth, 0);
+    assert_eq!(tree.iter().find(|n| n.id == "g4").unwrap().depth, 0);
+    let pos = |x: &str| ids.iter().position(|i| *i == x).unwrap();
+    assert!(pos("g1") < pos("g2") && pos("g1") < pos("g3"), "子节点要排在父节点之后：{ids:?}");
+    assert!(pos("g2") <= pos("g1") + 1 || pos("g3") <= pos("g1") + 2, "DFS 顺序：{ids:?}");
+    let child = tree.iter().find(|n| n.id == "g2").unwrap();
+    assert_eq!(child.depth, 1);
+    assert_eq!(child.path_names, vec!["解表药", "发散风寒药"]);
+    assert_eq!(child.display_path(), "解表药 / 发散风寒药");
+    // 子节点必须紧跟其父之后（DFS 顺序）
+    assert!(ids.iter().position(|x| *x == "g2").unwrap() > ids.iter().position(|x| *x == "g1").unwrap());
+}
+
+#[test]
+fn group_tree_tolerates_dangling_parent() {
+    let groups = vec![grp("a", "孤儿组", Some("已删除的父级"))];
+    let tree = group_tree(&groups);
+    assert_eq!(tree.len(), 1);
+    assert_eq!(tree[0].depth, 0, "父级不存在时当顶层，别整棵树消失");
+    assert_eq!(tree[0].path_names, vec!["孤儿组"]);
+}
+
+#[test]
+fn group_cycle_is_detected() {
+    let groups = vec![
+        grp("a", "A", None),
+        grp("b", "B", Some("a")),
+        grp("c", "C", Some("b")),
+    ];
+    assert!(would_cycle(&groups, "a", Some("c")), "把外公挂到孙子下面会成环");
+    assert!(would_cycle(&groups, "a", Some("a")), "不能自指");
+    assert!(!would_cycle(&groups, "c", Some("a")), "正常调层级不该报环");
+    assert!(!would_cycle(&groups, "a", None), "设为顶层永远合法");
+}
+
+#[test]
+fn group_path_names_resolves_chain() {
+    let groups = vec![grp("a", "章", None), grp("b", "节", Some("a")), grp("c", "药群", Some("b"))];
+    assert_eq!(path_names(&groups, "c"), vec!["章", "节", "药群"]);
+    assert!(path_names(&groups, "不存在").is_empty());
 }

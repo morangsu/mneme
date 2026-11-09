@@ -10,14 +10,18 @@ import io.github.morangsu.mneme.ffi.configureSync as ffiConfigureSync
 import io.github.morangsu.mneme.ffi.createEntities as ffiCreateEntities
 import io.github.morangsu.mneme.ffi.createEntity as ffiCreateEntity
 import io.github.morangsu.mneme.ffi.deleteEntity as ffiDeleteEntity
+import io.github.morangsu.mneme.ffi.deleteGroup as ffiDeleteGroup
 import io.github.morangsu.mneme.ffi.entityHistory as ffiEntityHistory
 import io.github.morangsu.mneme.ffi.entityTemplate as ffiEntityTemplate
+import io.github.morangsu.mneme.ffi.listGroups as ffiListGroups
 import io.github.morangsu.mneme.ffi.listDeleted as ffiListDeleted
 import io.github.morangsu.mneme.ffi.parsePaste as ffiParsePaste
 import io.github.morangsu.mneme.ffi.parsePasteMany as ffiParsePasteMany
 import io.github.morangsu.mneme.ffi.previewImport as ffiPreviewImport
 import io.github.morangsu.mneme.ffi.restoreEntity as ffiRestoreEntity
+import io.github.morangsu.mneme.ffi.setEntityGroup as ffiSetEntityGroup
 import io.github.morangsu.mneme.ffi.undoEdit as ffiUndoEdit
+import io.github.morangsu.mneme.ffi.upsertGroup as ffiUpsertGroup
 import io.github.morangsu.mneme.ffi.editEntity as ffiEditEntity
 import io.github.morangsu.mneme.ffi.entityDetail as ffiEntityDetail
 import io.github.morangsu.mneme.ffi.exportData as ffiExportData
@@ -95,6 +99,19 @@ object MnemeApi {
 
     /** 把一段中文文本解析成字段；认不出的行原样返回。 */
     fun parsePaste(text: String, kind: String): String = ffiParsePaste(text, kind)
+
+    /** 分组树（含每组成员数）。 */
+    fun listGroups(): String = ffiListGroups()
+
+    /** 新建/重命名/改上级；parent 传空串表示顶层。 */
+    fun upsertGroup(id: String, name: String, parent: String): String =
+        ffiUpsertGroup(id, name, parent)
+
+    fun deleteGroup(groupId: String): String = ffiDeleteGroup(groupId)
+
+    /** 把实体挂到分组；groupId 传空串表示移出分组。 */
+    fun setEntityGroup(entityId: String, groupId: String): String =
+        ffiSetEntityGroup(entityId, groupId)
 
     /** 导入预览：逐条差异，只读。 */
     fun previewImport(content: String, filename: String): String =

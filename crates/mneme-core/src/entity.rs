@@ -146,6 +146,13 @@ pub struct Group {
     pub id: String,
     pub kind: String,
     pub name: String,
+    /// 上级分组 id。`None` = 顶层。
+    ///
+    /// 放在 `Group` 而不是 `common` 里：层级是核心结构，不是可选元数据 ——
+    /// 视图分组、循环检测、深度限制都靠它。旧数据没有这个字段时反序列化成“顶层”，
+    /// 不会因为加字段而读不出快照。
+    #[serde(default)]
+    pub parent: Option<String>,
     #[serde(default)]
     pub common: BTreeMap<String, Value>,
     #[serde(default)]
