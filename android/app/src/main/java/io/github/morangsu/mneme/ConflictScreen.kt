@@ -249,7 +249,12 @@ private fun ConflictCard(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
-            if (conflict.personalized) Badge("个性化", MnemeColors.Ok)
+            // 无基线的冲突判不出是谁改的，别打「个性化」标签误导用户
+            if (conflict.base.contains("无基线")) {
+                Badge("无基线·需确认", MnemeColors.Warn)
+            } else if (conflict.personalized) {
+                Badge("个性化", MnemeColors.Ok)
+            }
             if (conflict.immutable) Badge("不可改·原样", MnemeColors.Danger)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

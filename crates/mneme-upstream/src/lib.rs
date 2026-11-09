@@ -128,6 +128,54 @@ kind = "tags"
         assert_eq!(c.page, Some(12));
     }
 
+    /// 回归：首次拉取时本地已有一模一样的数据（实体不是「新增」），
+    /// 这次拉取必须把基线写下来，否则下一次上游改动会被当成「没变」丢掉。
+    #[test]
+    fn pull_records_baseline_for_untouched_entities() {
+        let public = bundle(1, vec![ent("麻黄", "教材原句", "发汗解表", "辛温")]);
+        let local = vec![ent("麻黄", "教材原句", "发汗解表", "辛温")];
+        let prov = ProvenanceStore::default();
+        let plan = plan_pull(&local, &public, &prov, &schema(), &topo(), "phone", 200).unwrap();
+        assert!(plan.conflicts.is_empty());
+        assert!(plan.auto.is_empty());
+        assert!(plan.additions.is_empty());
+
+        let (_, new_prov, _) =
+            apply_decisions(&plan, &[], &local, &schema(), &prov, &topo(), "phone", 300).unwrap();
+        assert_eq!(new_prov.upstream_rev, 1);
+        assert_eq!(
+            new_prov.entities["麻黄"].fields["effects"].upstream_value,
+            "发汗解表"
+        );
+        assert_eq!(new_prov.entities["麻黄"].fields["effects"].origin, Origin::Upstream);
+
+        // 上游改了 effects：必须识别成「本地未改 → 自动采用上游」
+        let upstream = bundle(2, vec![ent("麻黄", "教材原句", "发汗解表|利水消肿", "辛温")]);
+        let plan2 = plan_pull(&local, &upstream, &new_prov, &schema(), &topo(), "phone", 400).unwrap();
+        assert!(plan2.conflicts.is_empty(), "{}", plan2.summary());
+        assert!(plan2.auto.iter().any(|a| a.field == "effects"));
+    }
+
+    /// 没有基线的字段两边值不同：判不出是谁改的，必须交给用户而不是静默吞掉。
+    #[test]
+    fn missing_baseline_surfaces_conflict() {
+        let public = bundle(3, vec![ent("麻黄", "教材原句", "发汗解表|利水消肿", "辛温")]);
+        let local = vec![ent("麻黄", "教材原句", "发汗解表", "辛温")];
+        let prov = ProvenanceStore::default();
+        let plan = plan_pull(&local, &public, &prov, &schema(), &topo(), "phone", 200).unwrap();
+        let c = plan
+            .conflicts
+            .iter()
+            .find(|c| c.field == "effects")
+            .expect("无基线且不一致应出冲突");
+        assert!(c.base.contains("无基线"), "{}", c.base);
+        assert_eq!(c.local, "发汗解表");
+        assert_eq!(c.upstream, "发汗解表|利水消肿");
+        assert_eq!(c.suggestion, Decision::KeepMine);
+        // 两边相同的字段不该凑热闹
+        assert!(plan.conflicts.iter().all(|x| x.field == "effects"), "{:?}", plan.summary());
+    }
+
     #[test]
     fn unresolved_conflicts_block_all_writes() {
         let base = bundle(1, vec![ent("麻黄", "教材原句", "发汗解表", "辛温")]);

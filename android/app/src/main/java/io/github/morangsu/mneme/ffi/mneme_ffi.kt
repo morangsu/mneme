@@ -747,6 +747,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -765,6 +769,10 @@ internal interface IntegrityCheckingUniffiLib : Library {
     fun uniffi_mneme_ffi_checksum_func_answer(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_configure_sync(
+): Short
+fun uniffi_mneme_ffi_checksum_func_edit_entity(
+): Short
+fun uniffi_mneme_ffi_checksum_func_entity_detail(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_export_data(
 ): Short
@@ -846,6 +854,10 @@ internal interface UniffiLib : Library {
     fun uniffi_mneme_ffi_fn_func_answer(`cardId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_configure_sync(`configJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_edit_entity(`entityId`: RustBuffer.ByValue,`fieldsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_entity_detail(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_export_data(`format`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1009,6 +1021,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_configure_sync() != 38613.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_edit_entity() != 57919.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_entity_detail() != 37447.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_export_data() != 9957.toShort()) {
@@ -1282,6 +1300,35 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_configure_sync(
         FfiConverterString.lower(`configJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 批量改一条实体的字段。`fields_json` 形如 `{"effects":"a|b","dosage":"3-10g"}`。
+         *
+         * - `immutable` 字段一律拒改（性味归经、用量、配伍禁忌这类「原样字段」），
+         * 报错里列出具体字段名，UI 据此提示「需新建条目」。
+         * - 值没变化的字段不产生事件（`unchanged`），避免无意义的 rev 增长与同步流量。
+         * - 全部是合法改动才写；只写一条 `UpsertEntity`，`rev` 取库内最大值 +1。
+         */ fun `editEntity`(`entityId`: kotlin.String, `fieldsJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_edit_entity(
+        FfiConverterString.lower(`entityId`),FfiConverterString.lower(`fieldsJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 读单条实体的全部字段（含 `immutable` 标记与当前值），供编辑面板渲染。
+         */ fun `entityDetail`(`entityId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_entity_detail(
+        FfiConverterString.lower(`entityId`),_status)
 }
     )
     }

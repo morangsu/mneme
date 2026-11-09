@@ -111,14 +111,46 @@ pub fn plan_pull(
             }
             let up = uv.display();
             let mine = display(le, key);
-            let base = ep
-                .and_then(|e| e.fields.get(key))
+            let known = ep.and_then(|e| e.fields.get(key));
+            let has_base = known.is_some();
+            let base = known
                 .map(|f| f.upstream_value.clone())
                 .unwrap_or_else(|| up.clone());
 
             let local_changed = !same(&mine, &base);
             let upstream_changed = !same(&up, &base);
             let immutable = schema.is_immutable(&ue.kind, key);
+
+            // **没有基线 + 两边不一致**：既可能是用户改过，也可能是上游改过。
+            // 以前这里把 base 当成上游值，结果是「用户改动被上游静默覆盖」或
+            // 「上游改动永远不生效」（实测踩到：r3 改了两个字段，一项都没落地）。
+            // 判不出来就交用户 —— 宁可多问一次，也不替用户做决定。
+            if !has_base && !same(&mine, &up) {
+                plan.conflicts.push(Conflict {
+                    id: stable_id(&[id, key, "nobase"]),
+                    entity_id: (*id).to_string(),
+                    entity_name: display(le, primary),
+                    field: key.clone(),
+                    label: schema
+                        .field(&ue.kind, key)
+                        .map(|f| f.label.as_str())
+                        .unwrap_or(key.as_str())
+                        .to_string(),
+                    base: "（无基线：上次拉取时该字段未参与合并）".into(),
+                    upstream: up,
+                    local: mine,
+                    immutable,
+                    personalized: true,
+                    suggestion: Decision::KeepMine,
+                    kind: if immutable {
+                        ConflictKind::ImmutableClash
+                    } else {
+                        ConflictKind::BothChanged
+                    },
+                    page: le.source.as_ref().and_then(|s| s.page),
+                });
+                continue;
+            }
             // 保守判定：只要本地值 != 上次公共库值，就认为用户动过，
             // 不依赖 provenance 是否被及时更新（用户在 adopt 之后随手改字段是常态）。
             let personalized = local_changed
@@ -402,6 +434,36 @@ pub fn apply_decisions(
             decision: Some(format!("{d:?}").to_ascii_lowercase()),
             from_rev: plan.from_rev, to_rev: plan.to_rev,
         });
+    }
+
+    // 5) 基线校准：把本次 bundle 的**每个**基础字段都记成 base。
+    //
+    // 不这么做的话，只有「参与过 auto / additions / 冲突」的字段才有基线，
+    // 其余字段下次拉取时 base 会退化成"当前上游值"，于是上游改动被当成"没变"而丢弃。
+    // 这条是幂等的：值相同就是 Upstream，值不同说明用户保住了自己的值，记 User。
+    for ue in &plan.upstream.entities {
+        let ep = new_prov.entities.entry(ue.id.clone()).or_default();
+        for (k, v) in &ue.fields {
+            if !topo.is_base_field(k) {
+                continue;
+            }
+            let up = v.display();
+            let cur = map.get(&ue.id).map(|e| display(e, k)).unwrap_or_default();
+            let origin = if same(&cur, &up) {
+                Origin::Upstream
+            } else {
+                Origin::User
+            };
+            let edited_at = ep.fields.get(k).map(|f| f.edited_at).unwrap_or(0);
+            ep.fields.insert(
+                k.clone(),
+                FieldProvenance {
+                    upstream_value: up,
+                    origin,
+                    edited_at,
+                },
+            );
+        }
     }
 
     report.log = log;

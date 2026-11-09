@@ -1,6 +1,7 @@
 package io.github.morangsu.mneme
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,7 +36,7 @@ private data class ColumnDef(val key: String, val label: String, val immutable: 
 private sealed interface MatrixRow {
     data object Head : MatrixRow
     data class Group(val name: String) : MatrixRow
-    data class Data(val cells: List<String>) : MatrixRow
+    data class Data(val id: String, val cells: List<String>) : MatrixRow
 }
 
 /** 视图矩阵：视图下拉 + 分组表格；immutable 列在表头标「原样」。 */
@@ -51,6 +52,8 @@ fun MatrixScreen() {
     // 装载领域包后 +1，触发重新读 state / views（否则会一直停在空库状态）
     var reload by remember { mutableIntStateOf(0) }
     var loaded by remember { mutableStateOf(false) }
+    // 正在编辑的实体 id；非 null 时弹出编辑面板
+    var editing by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(reload) {
         val s = Api.state()
@@ -71,7 +74,7 @@ fun MatrixScreen() {
         if (defs.isNotEmpty()) selectedId = defs.first().id
     }
 
-    LaunchedEffect(selectedId) {
+    LaunchedEffect(selectedId, reload) {
         val id = selectedId ?: return@LaunchedEffect
         val r = Api.view(id)
         if (r.err() != null) {
@@ -99,6 +102,9 @@ fun MatrixScreen() {
                     color = MnemeColors.Text,
                     fontSize = 13.sp,
                 )
+                if (s.optInt("entities") > 0) {
+                    Text("点任意一行可编辑；「原样」字段不可改", color = MnemeColors.TextDim, fontSize = 11.sp)
+                }
             }
         }
 
@@ -158,13 +164,21 @@ fun MatrixScreen() {
                         when (row) {
                             is MatrixRow.Head -> HeaderRow(columns)
                             is MatrixRow.Group -> GroupRow(row.name)
-                            is MatrixRow.Data -> DataRow(row.cells)
+                            is MatrixRow.Data -> DataRow(row.cells) { editing = row.id }
                         }
                     }
                 }
             }
         }
         }
+    }
+
+    editing?.let { id ->
+        EntityEditorDialog(
+            entityId = id,
+            onDismiss = { editing = null },
+            onSaved = { reload++ },
+        )
     }
 }
 
@@ -194,7 +208,7 @@ private fun buildRows(data: JSONObject, columns: List<ColumnDef>): List<MatrixRo
                 lastGroup = group
             }
         }
-        out += MatrixRow.Data(columns.map { c -> row.optString(c.key, "") })
+        out += MatrixRow.Data(row.optString("_id"), columns.map { c -> row.optString(c.key, "") })
     }
     return out
 }
@@ -237,12 +251,13 @@ private fun GroupRow(name: String) {
 }
 
 @Composable
-private fun DataRow(cells: List<String>) {
+private fun DataRow(cells: List<String>, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(MnemeColors.Panel, RoundedCornerShape(4.dp))
             .border(0.5.dp, MnemeColors.Divider, RoundedCornerShape(4.dp))
+            .clickable { onClick() }
             .padding(6.dp),
     ) {
         cells.forEach { value ->

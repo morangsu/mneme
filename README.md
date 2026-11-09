@@ -355,7 +355,7 @@ APK 44.6 MB（含内置领域包与 `libmneme_ffi.so`），`pm install` 成功�
 
 | 环节 | 实测结果 |
 | --- | --- |
-| FFI 加载 | 真实 uniffi 绑定生效（未回退 Stub），16 → 19 个导出方法 |
+| FFI 加载 | 真实 uniffi 绑定生效（未回退 Stub），20 个导出方法（新增 `entityDetail` / `editEntity`） |
 | 首次建库 | 界面列出内置 4 个领域包 → 选「中药学」→ **实体 6 / 卡片 77 / rev 6** |
 | 矩阵 | 按药群分组，列 `药名/功效/特点锚/应用`，immutable 列标「原样」 |
 | AND 反查 | 线索 `功效:宣肺平喘` + `禁忌:表虚自汗` → **命中 1 项 · 麻黄 · 匹配 3.0** |
@@ -364,15 +364,23 @@ APK 44.6 MB（含内置领域包与 `libmneme_ffi.so`），`pm install` 成功�
 | 公共库拉取 r1 | `上游 r0 → r1：自动合并 0 / 新增 0 / 待裁决 0`（本地与公共一致） |
 | 公共库拉取 r2 | `上游 r0 → r2：新增 1 / 待裁决 0` → 无需裁决，**直接落库**，矩阵出现「生姜」，实体 7 / 卡片 89 |
 | 增量上行 | rev 7 → 27，事件分片 9700 B → 15550 B，新增 `deltas/delta-7-27.json`（旧 delta 保留） |
+| **单元格编辑** | 点「麻黄」行 → 面板列出 15 个字段，7 个可编辑；把「特点锚」改成 `TEST-EDIT` → **已保存 1 个字段 · rev 19 → 28**，面板副标题与按钮自动回到新状态 |
+| **原样字段拦截** | 「显示全部字段」后 6 个 `immutable` 字段是灰底只读块 + 「原样字段 · 不可改，需新建条目」，不给输入框；Rust 侧 `editEntity` 再校验一次（单测覆盖） |
+| **冲突裁决（真机）** | 上游 r3 改了麻黄/桂枝的「特点锚」→ 拉取报 `待裁决 2 项`，进「冲突」页三值并列；桂枝选**采用上游**、麻黄选**保留我的** → 落库后矩阵：桂枝=`表虚有汗、解肌、调和营卫`，麻黄=`TEST-EDIT` |
+| **裁决可溯源** | `upstream-decisions.jsonl` 已推到私有库：`{桂枝,features,takeupstream}` / `{麻黄,features,keepmine}` |
+| **二次拉取** | `已是最新：上游 r3，无需拉取`，`pending_plans 0` —— 同一冲突不再反复出现 |
 
-本地落盘：`files/mneme/data/` 下 `events/` `snapshots/` `sync.json` `index.sqlite` `upstream/{provenance.json,decisions.jsonl,staging-*.json,last-report.json}`（`provenance.json` 记录 `upstream_rev=2` 与逐字段 `origin`，是「本地改过」的判定基线）。
+本地落盘：`files/mneme/data/` 下 `events/` `snapshots/` `sync.json` `index.sqlite` `upstream/{provenance.json,decisions.jsonl,last-report.json}`（`provenance.json` 里 `upstream_rev=3`、7 条实体全部有逐字段 `upstream_value` + `origin`，是「本地改过」的判定基线；staging 计划在落库/裁决后即删）。
 
 远端结构（私有库 `data/`）：`manifest.json` / `latest.json` / `events/<device>.jsonl` / `snapshots/snap-*.{json,gz}` / `deltas/delta-<from>-<to>.json` / `sync/log.jsonl`。
 
-### 这轮实测抓到的两个真 bug
+### 这轮实测抓到的真 bug
 
 1. **`github.com:443` 走不通时首推没路**：本机 `git push` 被阻断（`api.github.com` 通）。补了 `tools/gh-commit.mjs` —— 用 Git Data API（blob → tree → commit → ref）一次提交写完所有文件，**读的是 git 索引里的 blob**，所以 LF 归一化、可执行位与 `git push` 完全一致。
 2. **事件分片第二次上传必 422**：`events/<device>.jsonl` 是**可变文件**，原来用无条件 PUT，文件已存在时 GitHub 要求带 `sha`，返回 422 且拿不到 412 自愈。改为先 `head()` 取 sha 再条件写，412 自愈随之生效。同时把 409/412/422 的响应体带进错误信息——只写状态码会让人误判成并发冲突。
+3. **上游改动被静默丢弃（最严重）**：`provenance` 原来只记录「参与过合并的字段」，本地值与公共库一致、没进过计划的那 6 味药**从来没有基线**；下次建计划时 `base` 退化成"当前上游值"，于是 `local_changed` 永远为真、`upstream_changed` 永远为假 —— 实测 r3 改了两个字段，界面报 `0/0/0` 却还说"已落库"，改动全丢。
+   修法两条：① 每次拉取结束做**基线校准**，把整包基础字段都写成 base；② **没有基线且两边不一致**时不猜，直接判成待裁决冲突（base 显示「（无基线：上次拉取时该字段未参与合并）」，建议值取 KeepMine 保护本地）。宁可多问一次，也不替用户做决定。
+4. **每进一次「冲突」页就多一份未决计划**：冲突页自己会再调一次 `upstreamPull`，而上游没推进时旧计划留在 `a.plans` 里，`pending_plans` 只涨不减、`staging-*.json` 越堆越多。改为「上游没推进就返回已有计划」「新计划作废旧计划并联删 staging」「落库/裁决后删 staging」。
 
 ## J. 三仓库用法速查
 
@@ -390,9 +398,16 @@ android\sync-assets.cmd     # 把 domains/ 的领域包同步进 APK assets（�
 
 **公开库是只读上游**：App 里「拉取公共基础库」只读、不写；无冲突时 Rust 侧直接落库（不留空确认步骤），有冲突则一项都不写、跳到「冲突」页逐项裁决。公开库读取复用私有库 token（手机上没有环境变量，匿名 60/h 且部分网络会被掐断）。
 
-## K. 尚未完成
+## K. 编辑与冲突的边界（已实测）
 
-1. **冲突裁决的真机回执**：冲突判定逻辑已有桌面端实测（1 项待裁决、`personalized=true`、三值并列、未决拒绝提交），但**手机端界面**还没跑过一次真实冲突 —— 需要一个「本地改过、上游也改」的场景；当前 App 没有编辑入口，只能靠导入改过的 CSV 制造。
-2. **编辑能力**：矩阵目前只读；改字段要走导入，后续补单元格编辑 + `immutable` 字段的「不可改，需新建」提示。
-3. **`upstream-adopt` 尚未需要**：拉取落库时 `apply_decisions` 已写入字段级 provenance（`upstream/provenance.json` 里 `upstream_rev=2`、每个字段带 `upstream_value` + `origin`），所以「本地改过」的判定基线已经存在；`adopt` 只在「先有本地数据、后接公共库」时才用得上。
-4. **桌面 CLI 的 release 二进制未刷新**：仓库里已含 422 修复源码，但本机 `target/release/mneme.exe` 还是修复前的。
+- **可编辑**：`immutable = false` 的字段（药名 / 药群 / 功效 / 应用 / 特点锚 / 禁忌 / 教材主表述 / 同义 / 边界 / 掌握度…）。
+- **不可编辑**：`immutable = true` 的危险区（性味归经 / 毒性 / 用量 / 配伍禁忌 / 特殊煎法 / 相似药鉴别）。UI 灰底只读 + 文案「需新建条目」，Rust 侧 `apply_edit` 再拒一次，报错会点名具体字段。
+- **改一条 = 一条 `UpsertEntity` 事件**：`rev` 取库内最大值 +1，`device` 落当前设备，值没变化的字段不写入（`noop` 直接返回），避免无意义的事件与同步流量。
+- **Tags 字段**：输入框里 `a|b` 或 `a、b` 都按多值切分（与 CSV 导出的 `|` 一致），空段丢弃。
+- **编辑后不影响基线判定**：`personalized` 一直是「本地值 ≠ 上次公共库值」算出来的，不依赖 provenance 及时更新 —— 所以随手改完立刻拉取也能正确判成冲突。
+
+## L. 尚未完成
+
+1. **新增/删除条目**：目前只能改已有实体；「原样字段错了要新建一条」这条路径还只有文案，没有入口。
+2. **多设备编辑冲突**：`rev` 冲突时同步层只做字段级三方合并，同一字段两台设备同时改的裁决还没在真机上跑过。
+3. **`upstream-adopt` 仍未用过**：拉取时的基线校准已经覆盖了「先有本地数据、后接公共库」的场景，`adopt` 只在需要主动重建基线时才用。

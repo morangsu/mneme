@@ -9,8 +9,8 @@
 
 use mneme_codec::{self as codec, Format, ImportOptions, ImportStrategy};
 use mneme_core::{
-    DomainSchema, Entity, ReviewEvent, Sm2Scheduler, TermTable, due_cards, fold_events,
-    generate_choices, judge as judge_answer, now_ms,
+    DomainSchema, Entity, FieldKind, ReviewEvent, Sm2Scheduler, TermTable, Value, due_cards,
+    fold_events, generate_choices, judge as judge_answer, now_ms,
 };
 use mneme_store::{Op, Store};
 use mneme_sync::{SyncConfig, SyncEngine, incremental};
@@ -284,6 +284,8 @@ pub fn view(id: String) -> String {
             .iter()
             .map(|e| {
                 let mut row = serde_json::Map::new();
+                // 行里必须带实体 id：否则 UI 只能靠主键文本反查，改名后就对不上了。
+                row.insert("_id".into(), json!(e.id));
                 for c in &v.columns {
                     row.insert(c.clone(), json!(e.get(c).map(|x| x.display()).unwrap_or_default()));
                 }
@@ -430,6 +432,204 @@ pub fn set_schema(toml: String) -> String {
     })
 }
 
+// ---------------------------------------------------------------- 编辑
+
+fn kind_name(k: FieldKind) -> &'static str {
+    match k {
+        FieldKind::Text => "text",
+        FieldKind::Tag => "tag",
+        FieldKind::Tags => "tags",
+        FieldKind::Number => "number",
+        FieldKind::Bool => "bool",
+    }
+}
+
+/// 把 UI 提交的裸值按字段类型转成 `Value`。
+/// Tags 允许传数组，也允许传 `a|b` / `a、b` 的字符串 —— UI 只有一个输入框。
+fn coerce(kind: FieldKind, raw: &Json) -> Option<Value> {
+    match kind {
+        FieldKind::Tags => match raw {
+            Json::Array(_) => Value::from_raw(kind, raw),
+            Json::String(s) => Some(Value::Tags(
+                s.split(['|', '、'])
+                    .map(str::trim)
+                    .filter(|x| !x.is_empty())
+                    .map(String::from)
+                    .collect(),
+            )),
+            _ => None,
+        },
+        FieldKind::Number => match raw {
+            Json::String(s) => s.trim().parse::<f64>().ok().map(Value::Number),
+            _ => raw.as_f64().map(Value::Number),
+        },
+        FieldKind::Bool => match raw {
+            Json::String(s) => match s.trim() {
+                "true" | "1" | "是" => Some(Value::Bool(true)),
+                "false" | "0" | "否" => Some(Value::Bool(false)),
+                _ => None,
+            },
+            _ => raw.as_bool().map(Value::Bool),
+        },
+        _ => Value::from_raw(kind, raw),
+    }
+}
+
+/// 读单条实体的全部字段（含 `immutable` 标记与当前值），供编辑面板渲染。
+#[uniffi::export]
+pub fn entity_detail(entity_id: String) -> String {
+    call(|a| {
+        let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
+        let found = a.store.read(|m| {
+            m.entities_vec().into_iter().find(|x| x.id == entity_id && !x.deleted)
+        });
+        let Some(e) = found else { return err(format!("实体不存在或已删除：{entity_id}")) };
+        let def = schema.entity_def(&e.kind);
+        let primary = def
+            .and_then(|d| d.primary.clone())
+            .unwrap_or_else(|| "name".into());
+        let fields: Vec<Json> = def
+            .map(|d| {
+                d.fields
+                    .iter()
+                    .map(|f| {
+                        json!({
+                            "key": f.key,
+                            "label": if f.label.is_empty() { f.key.clone() } else { f.label.clone() },
+                            "kind": kind_name(f.kind),
+                            "immutable": f.immutable,
+                            "required": f.required,
+                            "value": e.get(&f.key).map(|v| v.display()).unwrap_or_default(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        json!({
+            "id": e.id,
+            "kind": e.kind,
+            "primary": primary,
+            "title": e.display_of(&primary),
+            "rev": e.rev,
+            "updated_at": e.updated_at,
+            "device": e.device,
+            "fields": fields,
+        })
+    })
+}
+
+/// 编辑核心：无 IO，只按 schema 校验并改内存里的实体。
+/// 拆出来是为了能单测 —— 全局 STATE 只能初始化一次，走不了多条用例。
+///
+/// 返回 `(changed, unchanged)`；任何一条不合法都整体失败，一个字段也不改。
+fn apply_edit(
+    schema: &DomainSchema,
+    entity: &mut Entity,
+    patch: &BTreeMap<String, Json>,
+    now: i64,
+) -> std::result::Result<(Vec<Json>, Vec<Json>), String> {
+    let Some(def) = schema.entity_def(&entity.kind) else {
+        return Err(format!("领域包缺少 {} 的定义", entity.kind));
+    };
+    let mut changed: Vec<Json> = Vec::new();
+    let mut unchanged: Vec<Json> = Vec::new();
+    let mut blocked: Vec<String> = Vec::new();
+    let mut bad: Vec<String> = Vec::new();
+
+    // 先在副本上改，全部合法才回写，避免「改了一半报错」
+    let mut staged = entity.clone();
+    for (key, raw) in patch {
+        let Some(f) = def.fields.iter().find(|f| f.key == *key) else {
+            return Err(format!("未知字段：{key}"));
+        };
+        if f.immutable {
+            blocked.push(if f.label.is_empty() { f.key.clone() } else { f.label.clone() });
+            continue;
+        }
+        let Some(val) = coerce(f.kind, raw) else {
+            bad.push(format!("{}（需要 {}）", f.key, kind_name(f.kind)));
+            continue;
+        };
+        if entity.get(key) == Some(&val) {
+            unchanged.push(json!(key));
+            continue;
+        }
+        let before = entity.get(key).map(|v| v.display()).unwrap_or_default();
+        let after = val.display();
+        staged.set(key.clone(), val, now);
+        changed.push(json!({
+            "key": key,
+            "label": if f.label.is_empty() { f.key.clone() } else { f.label.clone() },
+            "before": before,
+            "after": after,
+        }));
+    }
+
+    if !blocked.is_empty() {
+        return Err(format!("原样字段不可修改（需新建条目）：{}", blocked.join("、")));
+    }
+    if !bad.is_empty() {
+        return Err(format!("以下字段的值类型不对：{}", bad.join("；")));
+    }
+    if changed.is_empty() {
+        return Ok((changed, unchanged));
+    }
+    *entity = staged;
+    Ok((changed, unchanged))
+}
+
+/// 批量改一条实体的字段。`fields_json` 形如 `{"effects":"a|b","dosage":"3-10g"}`。
+///
+/// - `immutable` 字段一律拒改（性味归经、用量、配伍禁忌这类「原样字段」），
+///   报错里列出具体字段名，UI 据此提示「需新建条目」。
+/// - 值没变化的字段不产生事件（`unchanged`），避免无意义的 rev 增长与同步流量。
+/// - 全部是合法改动才写；只写一条 `UpsertEntity`，`rev` 取库内最大值 +1。
+#[uniffi::export]
+pub fn edit_entity(entity_id: String, fields_json: String) -> String {
+    call(|a| {
+        let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
+        let patch: BTreeMap<String, Json> = match serde_json::from_str(&fields_json) {
+            Ok(v) => v,
+            Err(e) => return err(format!("fieldsJson 解析失败: {e}")),
+        };
+        if patch.is_empty() {
+            return err("没有要修改的字段");
+        }
+        let found = a.store.read(|m| {
+            m.entities_vec().into_iter().find(|x| x.id == entity_id && !x.deleted)
+        });
+        let Some(mut entity) = found else {
+            return err(format!("实体不存在或已删除：{entity_id}"));
+        };
+        let now = now_ms();
+        let (changed, unchanged) = match apply_edit(&schema, &mut entity, &patch, now) {
+            Ok(v) => v,
+            Err(e) => return err(e),
+        };
+        if changed.is_empty() {
+            return json!({
+                "ok": true, "id": entity.id, "noop": true,
+                "rev": entity.rev, "changed": [], "unchanged": unchanged,
+            });
+        }
+        let max_rev = a.store.stats().rev;
+        entity.rev = max_rev + 1;
+        entity.updated_at = now;
+        entity.device = a.store.device().to_string();
+        let op = Op::UpsertEntity { entity: entity.clone() };
+        match a.store.mutate(&[op]) {
+            Ok(_) => json!({
+                "ok": true,
+                "id": entity.id,
+                "rev": entity.rev,
+                "changed": changed,
+                "unchanged": unchanged,
+            }),
+            Err(e) => err(e),
+        }
+    })
+}
+
 /// 写入 `sync.json` 并立即重建同步引擎，不需要重启 APP。
 ///
 /// `config_json` 就是 `SyncConfig` 的 JSON（含 `targets` 数组）；凭据允许直接写明文，
@@ -542,6 +742,11 @@ pub fn upstream_pull() -> String {
             Err(e) => return err(e),
         };
         if bundle.rev <= a.provenance.upstream_rev {
+            // 上游没推进，但本地还有未决计划（用户切到「冲突」页会再调一次这里）：
+            // 把那份计划原样还回去。否则每进一次冲突页就多一份 staging + 多一个 pending。
+            if let Some(plan) = a.plans.values().next() {
+                return serde_json::to_value(plan).unwrap_or_else(|_| json!({}));
+            }
             return json!({ "unchanged": true, "upstream_rev": a.provenance.upstream_rev });
         }
         let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
@@ -560,6 +765,7 @@ pub fn upstream_pull() -> String {
         if no_conflicts {
             match apply_plan(a, &plan, &[]) {
                 Ok(r) => {
+                    let _ = fs::remove_file(a.root.join(format!("upstream/staging-{}.json", plan.id)));
                     if let Some(o) = value.as_object_mut() {
                         o.insert("applied".into(), r);
                     }
@@ -572,6 +778,10 @@ pub fn upstream_pull() -> String {
             }
             a.plans.remove(&plan_id);
         } else {
+            // 同一时刻只允许一份未决计划：旧的作废，别把 staging 堆在磁盘上
+            for old in std::mem::take(&mut a.plans).into_values() {
+                let _ = fs::remove_file(a.root.join(format!("upstream/staging-{}.json", old.id)));
+            }
             a.plans.insert(plan_id, plan);
         }
         value
@@ -668,6 +878,7 @@ pub fn upstream_resolve(plan_id: String, decisions_json: String) -> String {
         match apply_plan(a, &plan, &resolutions) {
             Ok(r) => {
                 a.plans.remove(&plan_id);
+                let _ = fs::remove_file(a.root.join(format!("upstream/staging-{plan_id}.json")));
                 let mut o = r;
                 if let Some(m) = o.as_object_mut() {
                     m.insert("ok".into(), json!(true));
@@ -730,6 +941,89 @@ mod tests {
         assert!(quiz(1).contains("cards"));
         assert!(upstream_status().contains("topology"));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    fn materia_schema() -> DomainSchema {
+        DomainSchema::from_toml(
+            &fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../domains/materia-medica.toml"),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn herb() -> Entity {
+        let mut e = Entity::new("herb-mahuang", "herb", "test", 0);
+        e.set("name", Value::Text("麻黄".into()), 0);
+        e.set("features", Value::Tags(vec!["发汗力强".into()]), 0);
+        e.set("nature", Value::Text("辛、微苦，温。归肺、膀胱经".into()), 0);
+        e
+    }
+
+    #[test]
+    fn edit_rejects_immutable_fields() {
+        let schema = materia_schema();
+        let mut e = herb();
+        let patch: BTreeMap<String, Json> =
+            serde_json::from_str(r#"{"nature":"辛，温","effects":"发汗解表"}"#).unwrap();
+        let err = apply_edit(&schema, &mut e, &patch, 1).unwrap_err();
+        // 报错必须点名是哪个字段，否则 UI 只能干巴巴说「失败了」
+        assert!(err.contains("性味归经"), "{err}");
+        assert!(err.contains("需新建条目"), "{err}");
+        // 一项都不许改：连合法的 effects 也不能落
+        assert_eq!(e.get("effects"), None);
+        assert_eq!(e.get("nature").unwrap().display(), "辛、微苦，温。归肺、膀胱经");
+    }
+
+    #[test]
+    fn edit_tags_accepts_pipe_string() {
+        let schema = materia_schema();
+        let mut e = herb();
+        let patch: BTreeMap<String, Json> =
+            serde_json::from_str(r#"{"features":"宣肺平喘| 利水消肿 |"}"#).unwrap();
+        let (changed, unchanged) = apply_edit(&schema, &mut e, &patch, 7).unwrap();
+        assert_eq!(changed.len(), 1);
+        assert!(unchanged.is_empty());
+        assert_eq!(
+            e.get("features"),
+            Some(&Value::Tags(vec!["宣肺平喘".into(), "利水消肿".into()]))
+        );
+        // 空段被丢掉，不会写成空标签
+        assert_eq!(e.updated_at, 7);
+    }
+
+    #[test]
+    fn edit_same_value_is_noop() {
+        let schema = materia_schema();
+        let mut e = herb();
+        let before = e.clone();
+        let patch: BTreeMap<String, Json> =
+            serde_json::from_str(r#"{"features":"发汗力强","name":"麻黄"}"#).unwrap();
+        let (changed, unchanged) = apply_edit(&schema, &mut e, &patch, 9).unwrap();
+        assert!(changed.is_empty());
+        assert_eq!(unchanged.len(), 2);
+        // 无变化时实体一个字节都不该动（rev 不涨，同步不产生流量）
+        assert_eq!(e.rev, before.rev);
+        assert_eq!(e.updated_at, before.updated_at);
+    }
+
+    #[test]
+    fn edit_unknown_field_rejected() {
+        let schema = materia_schema();
+        let mut e = herb();
+        let patch: BTreeMap<String, Json> = serde_json::from_str(r#"{"nope":"x"}"#).unwrap();
+        let err = apply_edit(&schema, &mut e, &patch, 1).unwrap_err();
+        assert!(err.contains("未知字段"), "{err}");
+    }
+
+    #[test]
+    fn coerce_covers_number_and_bool() {
+        assert_eq!(coerce(FieldKind::Number, &json!("3")), Some(Value::Number(3.0)));
+        assert_eq!(coerce(FieldKind::Number, &json!("abc")), None);
+        assert_eq!(coerce(FieldKind::Bool, &json!("是")), Some(Value::Bool(true)));
+        assert_eq!(coerce(FieldKind::Bool, &json!("0")), Some(Value::Bool(false)));
+        assert_eq!(coerce(FieldKind::Tags, &json!("a、b")), Some(Value::Tags(vec!["a".into(), "b".into()])));
     }
 
     #[test]

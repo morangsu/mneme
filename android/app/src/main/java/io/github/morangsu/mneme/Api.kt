@@ -38,6 +38,14 @@ object MnemeApiStub {
         "reverse" -> SAMPLE_REVERSE
         "quiz" -> SAMPLE_QUIZ
         "answer" -> SAMPLE_ANSWER
+        "entityDetail" -> SAMPLE_ENTITY_DETAIL
+        "editEntity" -> JSONObject()
+            .put("ok", true)
+            .put("id", args["entityId"] ?: "")
+            .put("rev", 99)
+            .put("changed", JSONArray().put(JSONObject().put("key", "features").put("before", "发汗力强").put("after", "示例")))
+            .toString()
+
         "upstreamStatus" -> SAMPLE_UPSTREAM_STATUS
         "upstreamPull" -> SAMPLE_PULL_PLAN
 
@@ -168,6 +176,15 @@ object MnemeApiStub {
     private const val SAMPLE_UPSTREAM_STATUS =
         """{"app_repo":"morangsu/mneme","public_repo":"morangsu/mneme-data-public","private_repo":"morangsu/mneme-data-private","schema_id":"materia-medica","upstream_rev":7,"local_rev":9,"pending_conflicts":4,"targets":["github-private","github-public","local"]}"""
 
+    private const val SAMPLE_ENTITY_DETAIL =
+        """{"id":"herb-mahuang","kind":"herb","primary":"name","title":"麻黄","rev":3,"updated_at":0,"device":"android",
+"fields":[
+{"key":"name","label":"药名","kind":"text","immutable":false,"required":true,"value":"麻黄"},
+{"key":"effects","label":"功效","kind":"tags","immutable":false,"required":false,"value":"发汗解表、宣肺平喘"},
+{"key":"nature","label":"性味归经","kind":"text","immutable":true,"required":false,"value":"辛、微苦，温。归肺、膀胱经"},
+{"key":"dosage","label":"用量","kind":"text","immutable":true,"required":false,"value":"2–10g"}
+]}"""
+
     /** PullPlan 样例：4 条冲突，覆盖 personalized / immutable / 普通 / 上游移除 四类。 */
     private const val SAMPLE_PULL_PLAN =
         """{
@@ -216,6 +233,10 @@ object MnemeBridge {
                 "upstreamStatus" -> MnemeApi.upstreamStatus()
                 "upstreamAdopt" -> MnemeApi.upstreamAdopt()
                 "setSchema" -> MnemeApi.setSchema(args["toml"] as String)
+                "entityDetail" -> MnemeApi.entityDetail(args["entityId"] as String)
+                "editEntity" -> MnemeApi.editEntity(
+                    args["entityId"] as String, args["fieldsJson"] as String
+                )
                 "configureSync" -> MnemeApi.configureSync(args["configJson"] as String)
                 "importData" -> MnemeApi.importData(
                     args["content"] as String,
@@ -295,6 +316,13 @@ object Api {
     /** 写入 sync.json 并重建同步引擎；configJson 为 SyncConfig 的 JSON。 */
     suspend fun configureSync(configJson: String): JSONObject =
         call("configureSync", mapOf("configJson" to configJson))
+
+    suspend fun entityDetail(entityId: String): JSONObject =
+        call("entityDetail", mapOf("entityId" to entityId))
+
+    /** 批量改字段；fieldsJson 形如 {"effects":"a|b"}。immutable 字段会被 Rust 侧拒绝。 */
+    suspend fun editEntity(entityId: String, fieldsJson: String): JSONObject =
+        call("editEntity", mapOf("entityId" to entityId, "fieldsJson" to fieldsJson))
 
     suspend fun importData(content: String, filename: String, dry: Boolean): JSONObject =
         call("importData", mapOf("content" to content, "filename" to filename, "dry" to dry))

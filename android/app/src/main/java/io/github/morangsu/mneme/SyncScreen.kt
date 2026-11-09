@@ -132,6 +132,15 @@ fun SyncScreen(onGoConflict: () -> Unit) {
                 })
             }
             pullPlan?.let { p ->
+                // unchanged = 上游 rev 没推进（或本地已是最新），不是「合并成功」
+                if (p.optBoolean("unchanged")) {
+                    Text(
+                        "已是最新：上游 r${p.optInt("upstream_rev")}，无需拉取",
+                        color = MnemeColors.Ok,
+                        fontSize = 12.sp,
+                    )
+                    return@let
+                }
                 val summary = p.optString("summary", "")
                 if (summary.isNotBlank()) Text(summary, color = MnemeColors.Warn, fontSize = 12.sp)
                 val ap = p.optJSONObject("applied")
