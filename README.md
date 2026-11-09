@@ -365,6 +365,8 @@ APK 44.6 MB（含内置领域包与 `libmneme_ffi.so`），`pm install` 成功�
 | 公共库拉取 r2 | `上游 r0 → r2：新增 1 / 待裁决 0` → 无需裁决，**直接落库**，矩阵出现「生姜」，实体 7 / 卡片 89 |
 | 增量上行 | rev 7 → 27，事件分片 9700 B → 15550 B，新增 `deltas/delta-7-27.json`（旧 delta 保留） |
 
+本地落盘：`files/mneme/data/` 下 `events/` `snapshots/` `sync.json` `index.sqlite` `upstream/{provenance.json,decisions.jsonl,staging-*.json,last-report.json}`（`provenance.json` 记录 `upstream_rev=2` 与逐字段 `origin`，是「本地改过」的判定基线）。
+
 远端结构（私有库 `data/`）：`manifest.json` / `latest.json` / `events/<device>.jsonl` / `snapshots/snap-*.{json,gz}` / `deltas/delta-<from>-<to>.json` / `sync/log.jsonl`。
 
 ### 这轮实测抓到的两个真 bug
@@ -392,5 +394,5 @@ android\sync-assets.cmd     # 把 domains/ 的领域包同步进 APK assets（�
 
 1. **冲突裁决的真机回执**：冲突判定逻辑已有桌面端实测（1 项待裁决、`personalized=true`、三值并列、未决拒绝提交），但**手机端界面**还没跑过一次真实冲突 —— 需要一个「本地改过、上游也改」的场景；当前 App 没有编辑入口，只能靠导入改过的 CSV 制造。
 2. **编辑能力**：矩阵目前只读；改字段要走导入，后续补单元格编辑 + `immutable` 字段的「不可改，需新建」提示。
-3. **`mneme-data-private` 首次 `upstream-adopt`**：provenance 仍是 0，意味着还没有「个性化字段」的基线；等有编辑能力后再跑一次才有意义。
+3. **`upstream-adopt` 尚未需要**：拉取落库时 `apply_decisions` 已写入字段级 provenance（`upstream/provenance.json` 里 `upstream_rev=2`、每个字段带 `upstream_value` + `origin`），所以「本地改过」的判定基线已经存在；`adopt` 只在「先有本地数据、后接公共库」时才用得上。
 4. **桌面 CLI 的 release 二进制未刷新**：仓库里已含 422 修复源码，但本机 `target/release/mneme.exe` 还是修复前的。
