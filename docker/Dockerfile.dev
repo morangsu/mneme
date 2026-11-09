@@ -1,0 +1,46 @@
+# mneme 开发/测试镜像
+#
+# 用途：把「不依赖 Windows GUI」的测试全部搬进容器
+#   - Rust 内核 / 服务端：cargo test、clippy、HTTP 冒烟
+#   - 真实安卓设备：容器内 adb client 通过 ADB_SERVER_SOCKET 连宿主机的 adb server
+#   - 桌面端（后续 Compose Multiplatform）：JDK 已就位，可在容器里跑 headless 逻辑测试
+#
+# 明确不在容器里做的事：
+#   - 交叉编译 arm64 .so / 打 APK：需要 Android SDK + NDK（数 GB），且宿主机缓存已热。
+#     如果将来要完全容器化，另开 docker/Dockerfile.android（见 docker/README.md）。
+#   - 桌面端 UI 测试：容器无显示服务，UI 回归仍在宿主机跑。
+FROM rust:bookworm
+
+ARG PLATFORM_TOOLS_URL=https://mirrors.cloud.tencent.com/AndroidSDK/platform-tools_r37.0.2-linux.zip
+
+ENV DEBIAN_FRONTEND=noninteractive
+# adb 会往 $HOME/.android 写密钥；容器里固定成 /root，避免 volume 权限问题
+ENV ANDROID_SDK_HOME=/root
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl unzip ca-certificates \
+        python3 nodejs \
+        openjdk-17-jdk-headless \
+        pkg-config libssl-dev \
+        netcat-openbsd procps jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# adb client 必须与宿主 adb server 同代（协议号不一致时 client 会去 kill 远端 server）。
+# 宿主机是 platform-tools 37.0.1，这里装 37.0.2，协议号相同。
+# dl.google.com 在国内常被掐断，走腾讯云镜像。
+RUN curl -fsSL "$PLATFORM_TOOLS_URL" -o /tmp/pt.zip \
+    && unzip -q /tmp/pt.zip -d /opt \
+    && rm /tmp/pt.zip \
+    && ln -s /opt/platform-tools/adb /usr/local/bin/adb \
+    && adb version
+
+# 依赖缓存卷挂在下面两个位置，重建镜像不重下 crates
+ENV CARGO_HOME=/usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_NET_RETRY=5
+
+WORKDIR /work
+
+# 默认命令给一个明确的提示，避免 `docker run` 空转
+# 注意用 -c 而不是 -lc：登录 shell 会读 /etc/profile 把 PATH 重置掉，rustc/cargo 就找不到了
+CMD ["bash", "-c", "echo 'mneme dev image ready'; rustc --version; node --version; java -version 2>&1 | head -1; adb version | head -1"]

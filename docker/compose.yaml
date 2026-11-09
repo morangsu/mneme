@@ -1,0 +1,70 @@
+# mneme 双端测试环境
+#
+# 常用命令（在仓库根目录执行）：
+#   docker compose -f docker/compose.yaml build            # 建镜像（首次 ~2 分钟）
+#   docker compose -f docker/compose.yaml run --rm test    # Rust 全量测试
+#   docker compose -f docker/compose.yaml run --rm lint    # clippy
+#   docker compose -f docker/compose.yaml run --rm server  # 服务端 HTTP 冒烟
+#   docker compose -f docker/compose.yaml run --rm device  # 真机冒烟（装包+启动+截图+崩溃扫描）
+#   docker compose -f docker/compose.yaml run --rm shell   # 进容器手动折腾
+#
+# 缓存：cargo registry / target 各一个命名卷，重建容器不重编、重下。
+
+name: mneme
+
+x-base: &base
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.dev
+  image: mneme-dev:local
+  working_dir: /work
+  volumes:
+    - ..:/work
+    - cargo-registry:/usr/local/cargo/registry
+    - cargo-git:/usr/local/cargo/git
+    # 关键：Linux 容器的产物与宿主机（Windows/MSVC）分开，互不污染
+    - target-linux:/work/target
+  environment:
+    CARGO_TERM_COLOR: always
+    # 关掉增量编译：容器里绑定挂载的文件时间戳不可靠，增量缓存反而容易误判
+    CARGO_INCREMENTAL: "0"
+    RUST_BACKTRACE: "1"
+
+services:
+  test:
+    <<: *base
+    command: ["cargo", "test", "--workspace"]
+
+  lint:
+    <<: *base
+    command: ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+
+  server:
+    <<: *base
+    command: ["bash", "docker/scripts/server-smoke.sh"]
+    ports:
+      - "127.0.0.1:18080:18080"
+
+  device:
+    <<: *base
+    environment:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      # 宿主机的 adb server 监听 127.0.0.1:5037；
+      # Docker Desktop 的 host.docker.internal 会转发到宿主 loopback。
+      ADB_HOST: host.docker.internal
+      ADB_PORT: "5037"
+    # 不要加 extra_hosts host-gateway：Docker Desktop 会把它解析成 IPv6 网关，
+    # adb 直接报 "Network is unreachable"。用 Docker Desktop 自带的 DNS 即可。
+    command: ["bash", "docker/scripts/device-smoke.sh"]
+
+  shell:
+    <<: *base
+    command: ["bash"]
+    stdin_open: true
+    tty: true
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  target-linux:

@@ -1,0 +1,14 @@
+# Docker 构建上下文瘦身：镜像里不 COPY 仓库内容，只装工具链。
+# 没有这个文件，构建上下文会把 target/（数 GB）和真机截图一起打包上传。
+target
+.git
+.shots
+.tmp
+dist
+android/app/build
+android/.gradle
+android/build
+android/.kotlin
+**/*.so
+**/*.apk
+**/*.zip
