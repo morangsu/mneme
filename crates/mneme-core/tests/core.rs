@@ -1,7 +1,7 @@
 use mneme_core::{
-    DomainSchema, Entity, InvertedIndex, MergePolicy, Sm2Scheduler, TermTable, Value,
-    diff_entities, fold_events, generate_cards, merge_events, normalize, schema::TermAliasDef,
-    three_way,
+    DomainSchema, Entity, InvertedIndex, MergePolicy, ReviewEvent, Sm2Scheduler, SrsState, TermTable,
+    Value, daily_queue, diff_entities, fold_events, generate_cards, mastery_label, merge_events,
+    normalize, schema::TermAliasDef, suggest_grade, weak_cards, three_way,
 };
 
 fn full_schema() -> DomainSchema {
@@ -245,3 +245,125 @@ fn term_table_and_normalization_cover_rare_chars() {
     }]);
     assert!(t.canonical("解表").starts_with("以发散表邪"));
 }
+
+
+// ---- A2 复习闭环：队列 / 自动评分 / 错题本 / 掌握度派生 ----
+
+fn bare_card(id: &str, entity: &str, direction: &str) -> mneme_core::Card {
+    // Card 是派生数据，没有 new 构造器；测试只需要 id/entity/direction 三件事
+    let mut c = mneme_core::Card {
+        id: id.into(),
+        entity_id: entity.into(),
+        direction: direction.into(),
+        clue_field: String::new(),
+        clue_term: String::new(),
+        prompt: format!("{entity} · {direction}"),
+        answer: String::new(),
+        accept: vec![],
+        answer_fields: vec![],
+        scope: None,
+        candidates: vec![],
+        enumerate: false,
+        immutable_boundary: vec![],
+    };
+    c.prompt = format!("{entity} · {direction}");
+    c
+}
+
+#[test]
+fn daily_queue_orders_due_first_then_clusters_new() {
+    let cards = vec![
+        bare_card("c-new-1", "薄荷", "effects_to_name"),
+        bare_card("c-due-1", "麻黄", "name_to_effects"),
+        bare_card("c-new-2", "麻黄", "effects_to_name"),
+        bare_card("c-due-2", "桂枝", "name_to_effects"),
+    ];
+    let mut states: std::collections::HashMap<String, SrsState> = Default::default();
+    let now = 10 * DAY;
+    let mut s1 = SrsState::default();
+    s1.due = now - DAY; // 桂枝更逾期，应排最前
+    states.insert("c-due-2".into(), s1);
+    let mut s2 = SrsState::default();
+    s2.due = now - 100; // 麻黄刚到期
+    states.insert("c-due-1".into(), s2);
+
+    let q = daily_queue(&cards, &states, now, 10, 10);
+    assert_eq!(q.due, vec!["c-due-2".to_string(), "c-due-1".to_string()]);
+    // 新卡按实体聚簇（entity_id 字典序：薄(U+8584) < 麻(U+9EBB)，薄荷在前）
+    assert_eq!(q.new, vec!["c-new-1".to_string(), "c-new-2".to_string()]);
+    assert_eq!(q.items.len(), 4);
+    assert_eq!(q.items[0], "c-due-2");
+}
+
+#[test]
+fn daily_queue_respects_limits() {
+    let cards: Vec<_> = (0..5).map(|i| bare_card(&format!("c-new-{i}"), "薄荷", "d")).collect();
+    let empty: std::collections::HashMap<String, SrsState> = Default::default();
+    let q = daily_queue(&cards, &empty, DAY, 2, 3);
+    assert!(q.due.is_empty());
+    assert_eq!(q.new.len(), 2, "新卡上限生效");
+    assert_eq!(q.items.len(), 2);
+}
+
+#[test]
+fn suggest_grade_follows_correctness_and_elapsed() {
+    assert_eq!(suggest_grade(false, 1000, 0.9).0, 1);
+    assert_eq!(suggest_grade(true, 20_000, 1.0).0, 2, "想太久");
+    assert_eq!(suggest_grade(true, 8_000, 1.0).0, 3);
+    assert_eq!(suggest_grade(true, 2_000, 1.0).0, 4);
+    assert_eq!(suggest_grade(true, 2_000, 0.86).0, 2, "擦边判对");
+}
+
+fn ev(card: &str, ts: i64, grade: u8) -> ReviewEvent {
+    ReviewEvent { card_id: card.into(), ts, grade, device: "t".into(), seq: 0 }
+}
+
+#[test]
+fn weak_cards_need_two_consecutive_misses() {
+    let now = 100 * DAY;
+    let events = vec![
+        ev("a", now - DAY, 1),
+        ev("a", now - DAY / 2, 1),          // a：末尾连错 2 次 -> 薄弱
+        ev("b", now - DAY, 1),
+        ev("b", now - DAY / 2, 3),          // b：最后答对了 -> 不薄弱
+        ev("c", now - DAY, 1),
+        ev("c", now - DAY / 2, 1),
+        ev("c", now - DAY / 4, 1),          // c：连错 3 次 -> 薄弱且排前
+        ev("d", now - 40 * DAY, 1),          // d：窗口外 -> 不算
+        ev("d", now - 39 * DAY, 1),
+    ];
+    let w = weak_cards(&events, now, 10);
+    assert_eq!(w.iter().map(|x| x.card_id.as_str()).collect::<Vec<_>>(), vec!["c", "a"]);
+    assert_eq!(w[0].misses, 3);
+    // d 的错都在 30 天窗口外，且没有窗口内事件 -> 不出现
+    assert!(!w.iter().any(|x| x.card_id == "d"));
+}
+
+#[test]
+fn mastery_label_follows_stability_and_lapses() {
+    assert_eq!(mastery_label(0.5, 0, Some(4)), "生疏", "stability 太低");
+    assert_eq!(mastery_label(2.0, 0, None), "熟悉");
+    assert_eq!(mastery_label(9.0, 0, Some(3)), "熟练");
+    assert_eq!(mastery_label(9.0, 2, Some(3)), "生疏", "lapses >= 2 直接生疏");
+    assert_eq!(mastery_label(9.0, 0, Some(1)), "熟悉", "刚答错还不够熟练");
+}
+
+#[test]
+fn mastery_aggregates_across_entity_cards() {
+    // 实体有两张卡，一张很稳一张很生疏：均值落在「熟悉」
+    let mut states: std::collections::HashMap<String, SrsState> = Default::default();
+    let mut a = SrsState::default();
+    a.stability = 12.0;
+    a.reps = 3;
+    let mut b = SrsState::default();
+    b.stability = 0.5;
+    b.reps = 1;
+    states.insert("a".into(), a);
+    states.insert("b".into(), b);
+    let vals: Vec<&SrsState> = ["a", "b"].iter().filter_map(|k| states.get(*k)).collect();
+    let avg = vals.iter().map(|s| s.stability).sum::<f64>() / vals.len() as f64;
+    let lapses: u32 = vals.iter().map(|s| s.lapses).sum();
+    assert_eq!(mastery_label(avg, lapses, Some(3)), "熟悉");
+}
+
+const DAY: i64 = 86_400_000;

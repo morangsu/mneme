@@ -765,6 +765,12 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -808,6 +814,8 @@ fun uniffi_mneme_ffi_checksum_func_open_database(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_quiz(
 ): Short
+fun uniffi_mneme_ffi_checksum_func_quiz_queue(
+): Short
 fun uniffi_mneme_ffi_checksum_func_restore_entity(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_reverse(
@@ -817,6 +825,8 @@ fun uniffi_mneme_ffi_checksum_func_review(
 fun uniffi_mneme_ffi_checksum_func_set_schema(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_state(
+): Short
+fun uniffi_mneme_ffi_checksum_func_suggest_grade(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_sync(
 ): Short
@@ -833,6 +843,8 @@ fun uniffi_mneme_ffi_checksum_func_upstream_status(
 fun uniffi_mneme_ffi_checksum_func_view(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_views(
+): Short
+fun uniffi_mneme_ffi_checksum_func_weak_cards(
 ): Short
 fun ffi_mneme_ffi_uniffi_contract_version(
 ): Int
@@ -907,6 +919,8 @@ fun uniffi_mneme_ffi_fn_func_open_database(`path`: RustBuffer.ByValue,`device`: 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_quiz(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_quiz_queue(`newLimit`: Int,`dueLimit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_restore_entity(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_reverse(`cluesJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -916,6 +930,8 @@ fun uniffi_mneme_ffi_fn_func_review(`cardId`: RustBuffer.ByValue,`grade`: Byte,u
 fun uniffi_mneme_ffi_fn_func_set_schema(`toml`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_state(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_suggest_grade(`correct`: Byte,`elapsedMs`: Long,`score`: Double,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_sync(`targetId`: RustBuffer.ByValue,`dry`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -932,6 +948,8 @@ fun uniffi_mneme_ffi_fn_func_upstream_status(uniffi_out_err: UniffiRustCallStatu
 fun uniffi_mneme_ffi_fn_func_view(`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_views(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_weak_cards(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun ffi_mneme_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1101,6 +1119,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_quiz() != 42537.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mneme_ffi_checksum_func_quiz_queue() != 53920.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mneme_ffi_checksum_func_restore_entity() != 18817.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1114,6 +1135,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_state() != 30425.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_suggest_grade() != 1576.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_sync() != 32170.toShort()) {
@@ -1138,6 +1162,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_views() != 21883.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_weak_cards() != 48187.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1262,6 +1289,52 @@ public object FfiConverterUInt: FfiConverter<UInt, Int> {
 
     override fun write(value: UInt, buf: ByteBuffer) {
         buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterLong: FfiConverter<Long, Long> {
+    override fun lift(value: Long): Long {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Long {
+        return buf.getLong()
+    }
+
+    override fun lower(value: Long): Long {
+        return value
+    }
+
+    override fun allocationSize(value: Long) = 8UL
+
+    override fun write(value: Long, buf: ByteBuffer) {
+        buf.putLong(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterDouble: FfiConverter<Double, Double> {
+    override fun lift(value: Double): Double {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Double {
+        return buf.getDouble()
+    }
+
+    override fun lower(value: Double): Double {
+        return value
+    }
+
+    override fun allocationSize(value: Double) = 8UL
+
+    override fun write(value: Double, buf: ByteBuffer) {
+        buf.putDouble(value)
     }
 }
 
@@ -1506,6 +1579,19 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     
 
         /**
+         * 每日队列：到期优先（越逾期越靠前）、新卡限量（默认 10 / 50）。
+         * `weak` 是错题本张数，UI 据此显示「薄弱 N 张」入口。
+         */ fun `quizQueue`(`newLimit`: kotlin.UInt, `dueLimit`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_quiz_queue(
+        FfiConverterUInt.lower(`newLimit`),FfiConverterUInt.lower(`dueLimit`),_status)
+}
+    )
+    }
+    
+
+        /**
          * 从回收站恢复（写一条 deleted=false 的新快照，历史里会多一条 restore）。
          */ fun `restoreEntity`(`entityId`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
@@ -1552,6 +1638,15 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_state(
         _status)
+}
+    )
+    }
+    
+ fun `suggestGrade`(`correct`: kotlin.Boolean, `elapsedMs`: kotlin.Long, `score`: kotlin.Double): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_suggest_grade(
+        FfiConverterBoolean.lower(`correct`),FfiConverterLong.lower(`elapsedMs`),FfiConverterDouble.lower(`score`),_status)
 }
     )
     }
@@ -1630,6 +1725,18 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_views(
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * 错题本：最近 30 天末尾连续答错 >=2 次的卡。连对两次自然移出。
+         */ fun `weakCards`(`limit`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_weak_cards(
+        FfiConverterUInt.lower(`limit`),_status)
 }
     )
     }

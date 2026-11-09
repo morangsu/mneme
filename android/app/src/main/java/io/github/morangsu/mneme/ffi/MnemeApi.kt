@@ -21,7 +21,10 @@ import io.github.morangsu.mneme.ffi.judge as ffiJudge
 import io.github.morangsu.mneme.ffi.openDatabase as ffiOpenDatabase
 import io.github.morangsu.mneme.ffi.quiz as ffiQuiz
 import io.github.morangsu.mneme.ffi.reverse as ffiReverse
+import io.github.morangsu.mneme.ffi.quizQueue as ffiQuizQueue
 import io.github.morangsu.mneme.ffi.review as ffiReview
+import io.github.morangsu.mneme.ffi.suggestGrade as ffiSuggestGrade
+import io.github.morangsu.mneme.ffi.weakCards as ffiWeakCards
 import io.github.morangsu.mneme.ffi.setSchema as ffiSetSchema
 import io.github.morangsu.mneme.ffi.state as ffiState
 import io.github.morangsu.mneme.ffi.sync as ffiSync
@@ -81,4 +84,14 @@ object MnemeApi {
     fun listDeleted(): String = ffiListDeleted()
     fun entityHistory(entityId: String, limit: UInt): String = ffiEntityHistory(entityId, limit)
     fun undoEdit(entityId: String): String = ffiUndoEdit(entityId)
+
+    /** 每日队列：到期优先、新卡限量。 */
+    fun quizQueue(newLimit: UInt, dueLimit: UInt): String = ffiQuizQueue(newLimit, dueLimit)
+
+    /** 自动评分建议：对错 + 相似度 + 用时 → 1..4。 */
+    fun suggestGrade(correct: Boolean, elapsedMs: Long, score: Double): String =
+        ffiSuggestGrade(correct, elapsedMs, score)
+
+    /** 错题本：最近 30 天末尾连错 >=2 次。 */
+    fun weakCards(limit: UInt): String = ffiWeakCards(limit)
 }

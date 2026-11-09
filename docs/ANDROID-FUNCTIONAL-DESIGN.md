@@ -255,7 +255,14 @@ Idle → Fetch(public/private) → Push(events) → Commit → Done(receipt)
 恢复（回收站清空、rev 11）→ 编辑保存（rev 12）→ 撤销（rev 13，值复原）→ 历史（新建/删除/恢复/修改/撤销五态齐全，
 字段级 `before → after` 正确）。全程 0 崩溃。
 
-**实现状态**：`createEntity` / `deleteEntity` / `restoreEntity` / `listDeleted` / `entityHistory` / `undoEdit` / `entityTemplate`（新建表单定义）**已实现并有单测**（A1）；`quizQueue` / `suggestGrade` / `weakCards` / `search` / `parseFields` / `setCredential` 待 A2/A4。`state()` 新增 `kind` 与 `recycle` 两个字段。
+**A2 真机回执（V2148A）**：复习页显示「今日 10 张（到期 0 / 新 10）· 薄弱 0」；判错后出现
+「✗ 判为不正确 · 相似度 0.0」+「建议评分：重来 · 答错，重来」，建议档按钮带 ✓；点重来排进
+5 分钟重试队列；连点两张「简单」后，用 root 读事件日志确认**同一次 mutate 里**先是 review 事件、
+紧跟 upsert_entity（mastery 生疏 → 熟悉）。崩溃 0。
+
+**实现状态（A2 已完成）**：`quizQueue`（到期优先+新卡限量+weak 计数）/ `suggestGrade`（纯函数）/ `weakCards`
+已实现并接入复习页（每日队列、建议评分带 ✓、5 分钟会话内重试、薄弱模式入口）；`review()` 复习后自动派生
+掌握度写回实体（手工覆盖 30 天内生效）。`createEntity` / `deleteEntity` / `restoreEntity` / `listDeleted` / `entityHistory` / `undoEdit` / `entityTemplate`（新建表单定义）**已实现并有单测**（A1）；`quizQueue` / `suggestGrade` / `weakCards` / `search` / `parseFields` / `setCredential` 待 A2/A4。`state()` 新增 `kind` 与 `recycle` 两个字段。
 
 **兼容性**：只增不改。`view()` 已加 `_id`；`entityDetail` / `editEntity` 保持。
 

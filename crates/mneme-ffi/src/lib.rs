@@ -9,8 +9,9 @@
 
 use mneme_codec::{self as codec, Format, ImportOptions, ImportStrategy};
 use mneme_core::{
-    DomainSchema, Entity, FieldKind, ReviewEvent, Sm2Scheduler, TermTable, Value, due_cards,
-    fold_events, generate_choices, judge as judge_answer, now_ms,
+    DomainSchema, Entity, FieldKind, ReviewEvent, Sm2Scheduler, TermTable, Value, daily_queue,
+    due_cards, fold_events, generate_choices, judge as judge_answer, mastery_label, now_ms,
+    suggest_grade as core_suggest_grade, weak_cards as core_weak_cards,
 };
 use mneme_store::{Op, Store};
 use mneme_sync::{SyncConfig, SyncEngine, incremental};
@@ -342,38 +343,64 @@ pub fn reverse(clues_json: String) -> String {
 
 #[uniffi::export]
 pub fn quiz(limit: u32) -> String {
+    // 老入口：到期与新卡合计不超过 limit。新代码请用 quizQueue。
+    quiz_queue_inner(limit, limit)
+}
+
+/// 每日队列：到期优先（越逾期越靠前）、新卡限量（默认 10 / 50）。
+/// `weak` 是错题本张数，UI 据此显示「薄弱 N 张」入口。
+#[uniffi::export]
+pub fn quiz_queue(new_limit: u32, due_limit: u32) -> String {
+    quiz_queue_inner(new_limit, due_limit)
+}
+
+fn quiz_queue_inner(new_limit: u32, due_limit: u32) -> String {
     call(|a| {
-        let (cards, states, entities, schema) = a.store.read(|m| {
+        let now = now_ms();
+        let (cards, events, entities, schema) = a.store.read(|m| {
             (
                 m.cards.clone(),
-                fold_events(&m.events, &Sm2Scheduler::default()),
+                m.events.clone(),
                 m.entities_vec(),
                 m.schema.clone(),
             )
         });
-        let due = due_cards(&states, now_ms(), cards.len());
-        let mut picked: Vec<_> = due.iter().filter_map(|id| cards.iter().find(|c| &c.id == id)).collect();
-        for c in &cards {
-            if picked.len() >= limit as usize { break; }
-            if !picked.iter().any(|p| p.id == c.id) { picked.push(c); }
-        }
-        picked.truncate(limit as usize);
-        let out: Vec<Json> = picked
+        let states = fold_events(&events, &Sm2Scheduler::default());
+        let q = daily_queue(&cards, &states, now, new_limit as usize, due_limit as usize);
+        let weak_n = core_weak_cards(&events, now, usize::MAX).len();
+        let entity_name = |eid: &str| {
+            entities
+                .iter()
+                .find(|e| e.id == eid)
+                .map(|e| e.display_of("name"))
+                .unwrap_or_else(|| eid.to_string())
+        };
+        let items: Vec<Json> = q
+            .items
             .iter()
+            .filter_map(|id| cards.iter().find(|c| &c.id == id))
             .map(|c| {
                 let choices = schema.as_ref().and_then(|s| {
-                    entities.iter().find(|e| e.id == c.entity_id).map(|e| generate_choices(s, e, &entities, 3))
+                    entities
+                        .iter()
+                        .find(|e| e.id == c.entity_id)
+                        .map(|e| generate_choices(s, e, &entities, 3))
                 }).unwrap_or_default();
                 json!({
                     "id": c.id, "prompt": c.prompt, "direction": c.direction,
+                    "entity_id": c.entity_id,
+                    "entity_name": entity_name(&c.entity_id),
                     "choices": choices, "boundary": c.immutable_boundary,
                 })
             })
             .collect();
-        json!({ "due": due.len(), "cards": out })
+        json!({
+            "due": q.due.len(), "new": q.new.len(), "total": q.items.len(),
+            "weak": weak_n,
+            "cards": items,
+        })
     })
 }
-
 #[uniffi::export]
 pub fn answer(card_id: String) -> String {
     call(|a| {
@@ -388,15 +415,74 @@ pub fn answer(card_id: String) -> String {
 #[uniffi::export]
 pub fn review(card_id: String, grade: u8) -> String {
     call(|a| {
+        let now = now_ms();
+        let device = a.store.device().to_string();
         let ev = ReviewEvent {
             card_id: card_id.clone(),
-            ts: now_ms(),
+            ts: now,
             grade: grade.clamp(1, 4),
-            device: a.store.device().to_string(),
+            device: device.clone(),
             seq: 0,
         };
-        match a.store.mutate(&[Op::Review { event: ev.clone() }]) {
-            Ok(n) => json!({ "ok": true, "applied": n, "event": ev.key() }),
+        let mut ops: Vec<Op> = vec![Op::Review { event: ev.clone() }];
+        let mut mastery = Json::Null;
+
+        // 复习后顺带派生掌握度：同实体所有已复习卡的 SRS 状态聚合。
+        // 手工覆盖 30 天内有效（mastery_override_at），期间派生值不覆盖用户判断。
+        let (mut events, cards, entities) =
+            a.store.read(|m| (m.events.clone(), m.cards.clone(), m.entities_vec()));
+        events.push(ev.clone());
+        let states = fold_events(&events, &Sm2Scheduler::default());
+        let entity_id = cards
+            .iter()
+            .find(|c| c.id == card_id)
+            .map(|c| c.entity_id.clone());
+        if let (Some(entity_id), Some(entity)) = (
+            entity_id.as_deref(),
+            entities.iter().find(|e| Some(e.id.as_str()) == entity_id.as_deref()),
+        ) {
+            let e_cards: Vec<_> = cards.iter().filter(|c| c.entity_id == entity_id).collect();
+            let reviewed: Vec<_> = e_cards
+                .iter()
+                .filter_map(|c| states.get(&c.id))
+                .filter(|s| s.reps > 0)
+                .collect();
+            if !reviewed.is_empty() {
+                let stability =
+                    reviewed.iter().map(|s| s.stability).sum::<f64>() / reviewed.len() as f64;
+                let lapses: u32 = reviewed.iter().map(|s| s.lapses).sum();
+                let ids: Vec<&str> = e_cards.iter().map(|c| c.id.as_str()).collect();
+                let last_grade = events
+                    .iter()
+                    .filter(|e| ids.contains(&e.card_id.as_str()))
+                    .map(|e| (e.ts, e.grade))
+                    .max_by_key(|x| x.0)
+                    .map(|x| x.1);
+                let label = mastery_label(stability, lapses, last_grade);
+
+                let override_at = entity.get("mastery_override_at").and_then(|v| match v {
+                    Value::Number(n) => Some(*n as i64),
+                    _ => None,
+                });
+                let overridden =
+                    override_at.map(|t| now - t < 30 * 86_400_000).unwrap_or(false);
+                let cur = entity.get("mastery").map(|v| v.display()).unwrap_or_default();
+                if cur != label && !overridden {
+                    let mut e2 = entity.clone();
+                    e2.set("mastery", Value::Text(label.into()), now);
+                    e2.rev = a.store.stats().rev + 1;
+                    e2.updated_at = now;
+                    e2.device = device.clone();
+                    mastery = json!({ "changed": true, "label": label, "prev": cur });
+                    ops.push(Op::UpsertEntity { entity: e2 });
+                } else {
+                    mastery = json!({ "changed": false, "label": cur, "overridden": overridden });
+                }
+            }
+        }
+
+        match a.store.mutate(&ops) {
+            Ok(n) => json!({ "ok": true, "applied": n, "event": ev.key(), "mastery": mastery }),
             Err(e) => err(e),
         }
     })
@@ -415,6 +501,43 @@ pub fn judge(card_id: String, input: String) -> String {
         let table = TermTable::from_defs(&defs);
         let j = judge_answer(&input, &card, &table, 0.85);
         json!({ "score": j.score, "correct": j.correct, "matched": j.matched })
+    })
+}
+
+#[uniffi::export]
+pub fn suggest_grade(correct: bool, elapsed_ms: i64, score: f64) -> String {
+    let (grade, reason) = core_suggest_grade(correct, elapsed_ms, score);
+    json!({ "grade": grade, "reason": reason }).to_string()
+}
+
+/// 错题本：最近 30 天末尾连续答错 >=2 次的卡。连对两次自然移出。
+#[uniffi::export]
+pub fn weak_cards(limit: u32) -> String {
+    call(|a| {
+        let now = now_ms();
+        let (events, cards) = a.store.read(|m| (m.events.clone(), m.cards.clone()));
+        let weak = core_weak_cards(&events, now, limit as usize);
+        let items: Vec<Json> = weak
+            .iter()
+            .filter_map(|w| cards.iter().find(|c| c.id == w.card_id).map(|c| (c, w)))
+            .map(|(c, w)| {
+                json!({
+                    "card_id": c.id, "prompt": c.prompt, "direction": c.direction,
+                    "entity_name": entities_name(a, &c.entity_id),
+                    "misses": w.misses, "last_ts": w.last_ts,
+                })
+            })
+            .collect();
+        json!({ "items": items })
+    })
+}
+
+fn entities_name(a: &App, entity_id: &str) -> String {
+    a.store.read(|m| {
+        m.entities
+            .get(entity_id)
+            .map(|e| e.display_of("name"))
+            .unwrap_or_else(|| entity_id.to_string())
     })
 }
 
@@ -1227,6 +1350,37 @@ mod tests {
         assert!(res.contains("\"ok\":true"), "{res}");
         assert!(!list_deleted().contains("测试药"));
         assert!(view("matrix".into()).contains("测试药"));
+
+        // ---- A2：每日队列 / 自动评分建议 / 错题本 / 掌握度派生 ----
+        let q: Json = serde_json::from_str(&quiz_queue(10, 50)).unwrap();
+        assert!(q["total"].as_u64().unwrap_or(0) > 0, "队列应有卡：{q}");
+        assert!(q["weak"].is_u64());
+        let card_id = q["cards"][0]["id"].as_str().unwrap().to_string();
+        let queue_entity = q["cards"][0]["entity_id"].as_str().unwrap().to_string();
+
+        // 自动评分建议：纯函数三档
+        assert!(suggest_grade(false, 1_000, 0.9).contains("\"grade\":1"));
+        assert!(suggest_grade(true, 2_000, 1.0).contains("\"grade\":4"));
+        assert!(suggest_grade(true, 20_000, 1.0).contains("\"grade\":2"));
+
+        // 复习 → 掌握度写回（三档之一，且 rev 前进）
+        let rev_before = entity_detail(queue_entity.clone()).split("\"rev\":").nth(1).unwrap_or("0")
+            .chars().take_while(|c| c.is_ascii_digit()).collect::<String>()
+            .parse::<u64>().unwrap_or(0);
+        let r = review(card_id.clone(), 4);
+        assert!(r.contains("mastery"), "{r}");
+        let detail = entity_detail(queue_entity.clone());
+        assert!(
+            detail.contains("生疏") || detail.contains("熟悉") || detail.contains("熟练"),
+            "mastery 应派生出三档之一：{detail}"
+        );
+
+        // 错题本：连错两次（同毫秒事件会被幂等键去重，必须隔开）
+        let _ = review(card_id.clone(), 1);
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let _ = review(card_id.clone(), 1);
+        let w = weak_cards(10);
+        assert!(w.contains(&card_id), "{w}");
 
         // 复制为新：旧条目要被盖上 superseded_by，主视图隐藏旧版、superseded 视图能看到
         let copy = create_entity(

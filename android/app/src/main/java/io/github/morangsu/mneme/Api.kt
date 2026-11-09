@@ -37,6 +37,9 @@ object MnemeApiStub {
         "view" -> SAMPLE_VIEW
         "reverse" -> SAMPLE_REVERSE
         "quiz" -> SAMPLE_QUIZ
+        "quizQueue" -> SAMPLE_QUIZ
+        "suggestGrade" -> JSONObject().put("grade", 3).put("reason", "正常速度").toString()
+        "weakCards" -> "{\"items\":[]}"
         "answer" -> SAMPLE_ANSWER
         "entityDetail" -> SAMPLE_ENTITY_DETAIL
         "entityTemplate" -> SAMPLE_ENTITY_DETAIL
@@ -229,6 +232,15 @@ object MnemeBridge {
                 "view" -> MnemeApi.view(args["id"] as String)
                 "reverse" -> MnemeApi.reverse(args["cluesJson"] as String)
                 "quiz" -> MnemeApi.quiz(args["limit"] as UInt)
+                "quizQueue" -> MnemeApi.quizQueue(
+                    args["newLimit"] as UInt, args["dueLimit"] as UInt
+                )
+                "suggestGrade" -> MnemeApi.suggestGrade(
+                    args["correct"] as Boolean,
+                    (args["elapsedMs"] as Number).toLong(),
+                    args["score"] as Double,
+                )
+                "weakCards" -> MnemeApi.weakCards(args["limit"] as UInt)
                 "answer" -> MnemeApi.answer(args["cardId"] as String)
                 "review" -> MnemeApi.review(args["cardId"] as String, args["grade"] as UByte)
                 "judge" -> MnemeApi.judge(args["cardId"] as String, args["input"] as String)
@@ -310,6 +322,15 @@ object Api {
         call("reverse", mapOf("cluesJson" to cluesJson))
 
     suspend fun quiz(limit: UInt): JSONObject = call("quiz", mapOf("limit" to limit))
+
+    suspend fun quizQueue(newLimit: UInt = 10u, dueLimit: UInt = 50u): JSONObject =
+        call("quizQueue", mapOf("newLimit" to newLimit, "dueLimit" to dueLimit))
+
+    suspend fun suggestGrade(correct: Boolean, elapsedMs: Long, score: Double): JSONObject =
+        call("suggestGrade", mapOf("correct" to correct, "elapsedMs" to elapsedMs, "score" to score))
+
+    suspend fun weakCards(limit: UInt = 20u): JSONObject =
+        call("weakCards", mapOf("limit" to limit))
 
     suspend fun answer(cardId: String): JSONObject = call("answer", mapOf("cardId" to cardId))
 

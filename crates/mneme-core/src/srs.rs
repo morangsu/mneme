@@ -111,6 +111,126 @@ pub fn due_cards(states: &HashMap<String, SrsState>, now: i64, limit: usize) -> 
         .collect()
 }
 
+/// 每日队列：到期卡优先（越逾期越靠前），新卡限量、按实体聚簇。
+/// 纯函数 —— 服务端 / 桌面端 / FFI 三处共用同一份判定。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DailyQueue {
+    /// 到期卡（已复习过、due <= now）
+    pub due: Vec<String>,
+    /// 新卡（从未复习过）
+    pub new: Vec<String>,
+    /// 会话顺序 = due 在前，new 在后
+    pub items: Vec<String>,
+}
+
+pub fn daily_queue(
+    cards: &[crate::card::Card],
+    states: &HashMap<String, SrsState>,
+    now: i64,
+    new_limit: usize,
+    due_limit: usize,
+) -> DailyQueue {
+    let mut due: Vec<(&str, i64)> = cards
+        .iter()
+        .filter_map(|c| states.get(&c.id).filter(|s| s.due <= now).map(|s| (c.id.as_str(), s.due)))
+        .collect();
+    due.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(b.0)));
+    let due: Vec<String> = due.into_iter().take(due_limit).map(|(id, _)| id.to_string()).collect();
+
+    // 新卡按 (实体, 方向, id) 排序：同一味药的几张卡会连着出现，认知上更连贯
+    let mut fresh: Vec<&crate::card::Card> =
+        cards.iter().filter(|c| !states.contains_key(&c.id)).collect();
+    fresh.sort_by(|a, b| {
+        a.entity_id
+            .cmp(&b.entity_id)
+            .then(a.direction.cmp(&b.direction))
+            .then(a.id.cmp(&b.id))
+    });
+    let new: Vec<String> = fresh.iter().take(new_limit).map(|c| c.id.clone()).collect();
+
+    let mut items = due.clone();
+    items.extend(new.clone());
+    DailyQueue { due, new, items }
+}
+
+/// 自动评分建议：判分对错 + 相似度 + 用时 → 1(重来)/2(困难)/3(良好)/4(简单)。
+pub fn suggest_grade(correct: bool, elapsed_ms: i64, score: f64) -> (u8, &'static str) {
+    if !correct {
+        return (1, "答错，重来");
+    }
+    if score < 0.95 {
+        return (2, "接近但不够准");
+    }
+    if elapsed_ms > 15_000 {
+        return (2, "想太久");
+    }
+    if elapsed_ms >= 5_000 {
+        return (3, "正常速度");
+    }
+    (4, "脱口而出")
+}
+
+/// 错题（薄弱）卡：最近 30 天**末尾连续答错** >=2 次。
+/// 连续答对会清零末尾 streak，自然移出错题本 —— 不需要单独的移出逻辑。
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeakCard {
+    pub card_id: String,
+    pub misses: u32,
+    pub last_ts: i64,
+}
+
+pub fn weak_cards(events: &[ReviewEvent], now: i64, limit: usize) -> Vec<WeakCard> {
+    let cutoff = now - 30 * DAY_MS;
+    let mut by_card: HashMap<&str, Vec<&ReviewEvent>> = HashMap::new();
+    for e in events {
+        if e.ts >= cutoff {
+            by_card.entry(e.card_id.as_str()).or_default().push(e);
+        }
+    }
+    let mut out: Vec<WeakCard> = Vec::new();
+    for (id, evs) in by_card {
+        let mut sorted = evs;
+        sorted.sort_by_key(|e| e.ts);
+        let mut streak = 0u32;
+        for e in sorted.iter().rev() {
+            if e.grade == 1 {
+                streak += 1;
+            } else {
+                break;
+            }
+        }
+        if streak >= 2 {
+            out.push(WeakCard {
+                card_id: id.to_string(),
+                misses: sorted.iter().filter(|e| e.grade == 1).count() as u32,
+                last_ts: sorted.last().map(|e| e.ts).unwrap_or(0),
+            });
+        }
+    }
+    out.sort_by(|a, b| {
+        b.misses
+            .cmp(&a.misses)
+            .then(b.last_ts.cmp(&a.last_ts))
+            .then(a.card_id.cmp(&b.card_id))
+    });
+    out.truncate(limit);
+    out
+}
+
+/// 掌握度派生：写回实体 `mastery` 字段的三档标签。
+/// stability 取该实体已复习卡片的均值，lapses 求和，last_grade 取最新一条事件的评分。
+pub fn mastery_label(stability: f64, lapses: u32, last_grade: Option<u8>) -> &'static str {
+    if lapses >= 2 || stability < 1.0 {
+        "生疏"
+    } else if stability < 7.0 {
+        "熟悉"
+    } else if last_grade.map(|g| g >= 3).unwrap_or(false) {
+        "熟练"
+    } else {
+        "熟悉"
+    }
+}
+
 /// FSRS 风格调度器（DSR：Difficulty / Stability / Retrievability）。
 /// 与 `Sm2Scheduler` 实现同一个 `Scheduler` trait，可随时替换；
 /// 参数可由用户自己的复习记录拟合（`fit`），不依赖外部服务。

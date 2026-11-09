@@ -29,7 +29,10 @@ pub use error::{Error, Result};
 pub use index::{InvertedIndex, Scored};
 pub use merge::{Diff, EntityChange, FieldChange, MergePolicy, diff_entities, merge_events, three_way};
 pub use schema::{DirectionDef, DomainSchema, EntityDef, FieldDef, FieldKind, FilterOp, TermAliasDef, ViewDef, ViewFilter};
-pub use srs::{FsrsScheduler, Scheduler, Sm2Scheduler, SrsState, due_cards, fold_events};
+pub use srs::{
+    DailyQueue, FsrsScheduler, Scheduler, Sm2Scheduler, SrsState, WeakCard, daily_queue,
+    due_cards, fold_events, mastery_label, suggest_grade, weak_cards,
+};
 pub use text::{TermTable, dice, normalize, remove_redundant, similarity};
 
 /// 内容寻址：任意字节 -> sha256 hex。快照、Bundle、事件幂等键共用。
