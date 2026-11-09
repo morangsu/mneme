@@ -54,6 +54,7 @@ object MnemeApiStub {
         "undoEdit" -> JSONObject().put("ok", true).put("rev", 9).put("restored", JSONArray().put("effects")).toString()
         "parsePaste" -> "{\"fields\":{\"name\":\"示例\"},\"hits\":[],\"unknown\":[],\"conflicts\":[],\"matched\":1}"
         "checkDuplicate" -> "{\"items\":[]}"
+        "previewImport" -> "{\"format\":\"csv\",\"total\":0,\"create\":0,\"update\":0,\"same\":0,\"items\":[],\"warnings\":[]}"
         "editEntity" -> JSONObject()
             .put("ok", true)
             .put("id", args["entityId"] ?: "")
@@ -280,6 +281,9 @@ object MnemeBridge {
                 "parsePaste" -> MnemeApi.parsePaste(
                     args["text"] as String, args["kind"] as String
                 )
+                "previewImport" -> MnemeApi.previewImport(
+                    args["content"] as String, args["filename"] as String
+                )
                 "checkDuplicate" -> MnemeApi.checkDuplicate(
                     args["kind"] as String,
                     args["fieldsJson"] as String,
@@ -410,6 +414,9 @@ object Api {
 
     suspend fun parsePaste(text: String, kind: String): JSONObject =
         call("parsePaste", mapOf("text" to text, "kind" to kind))
+
+    suspend fun previewImport(content: String, filename: String = "paste.txt"): JSONObject =
+        call("previewImport", mapOf("content" to content, "filename" to filename))
 
     suspend fun checkDuplicate(kind: String, fieldsJson: String, excludeId: String = ""): JSONObject =
         call("checkDuplicate", mapOf("kind" to kind, "fieldsJson" to fieldsJson, "excludeId" to excludeId))

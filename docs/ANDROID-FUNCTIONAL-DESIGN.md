@@ -307,16 +307,27 @@ UI 只覆盖识别到的字段，用户已填的其他格子不动。判定在 c
 「识别 3 项」逐行显示行号+字段+值、「没认出来 · junk」保留 → 「填入 3 项」→ 表单三格已填 → 保存（实体 7→8、卡片 89→91）。
 再开一次新建、粘贴同名 `TESTPASTE` → 350ms 后出现「⚠ 可能重复 · TESTPASTE（同名）· 点此处可打开它」。崩溃 0。
 
-**A3 未做**：导入前差异预览（`importData` 已有 `dry` 参数，缺「逐条差异」的返回体）、OCR 草稿化（ML Kit 现在只把整段文本回填到导入框）、
-批量粘贴多味药（一次只建一条，多行多条的语法还没定）。
+**导入差异预览**：`previewImport` 在真正写库前，把「将发生什么」逐条算出来 —— 新增 / 覆盖 / 无变化，
+覆盖的报到**字段名**，其中属于「原样字段」的单独用红字点名。完全只读（不调 `store.mutate`，冒烟测试断言预览前后 `state()` 完全一致）。
+UI 从「勾选仅预演 + 导入」改成「预览差异 → 确认写入 N 条」，一次点击不再是不可撤销的覆盖。
 
-**实现状态（A3）**：`parsePaste`（文本→字段）/ `checkDuplicate`（同名·同义名·近似名）已实现并接入新建对话框，有单测 + 真机回执。
+**顺带修的真 bug**：CSV 没有 `kind` 列时实体类型默认成 `"entity"`，于是字段 label 解析、`immutable` 判定、
+预览差异全部失效（预览里「功效」显示成 `effects`）。改成落到 schema 的第一个 kind —— 单领域库的 CSV 本来就不带 kind 列。
+
+**真机回执（V2148A）**：粘贴 `id,name,effects` + 两行数据 → 「预览（csv）· 新增 1 · 覆盖 1 · 无变化 0」+
+「⚠ 1 条会覆盖本地已有字段」→ 条目区显示「覆盖 TESTPASTE / 功效」「新增 NEWHERB」→「确认写入 2 条」→
+矩阵：实体 8→9、卡片 91→93、rev 17→19，TESTPASTE 的「功效」已变 `newfx`。崩溃 0。
+
+**A3 未做**：OCR 草稿化（ML Kit 现在只把整段文本回填到导入框，还没接 `parsePaste` 出草稿）、
+批量粘贴多味药（一次只建一条，多味药之间的分隔语法还没定）。
+
+**实现状态（A3）**：`parsePaste`（文本→字段）/ `checkDuplicate`（同名·同义名·近似名）/ `previewImport`（导入逐条差异）已实现，均有单测 + 真机回执。
 
 **实现状态（A2）**：`quizPlan`（按 review.json 出题，含本轮张数）/ `quizQueue`（显式参数版）/
 `reviewConfig` / `setReviewConfig` / `suggestGrade` / `weakCards` 已接入复习页；`review()` 复习后自动派生
 掌握度写回实体（手工覆盖 30 天内生效），回执里带「还有 N 张卡没学过」。**实现状态（A1）**：`createEntity` / `deleteEntity` / `restoreEntity` / `listDeleted` / `entityHistory` / `undoEdit` / `entityTemplate`，有单测 + 真机回执。
 
-**待做**：`search` / `setCredential`（A4）、导入差异预览（A3 余项）。FFI 共 **35 个导出**；`state()` 带 `kind` 与 `recycle`。
+**待做**：`search` / `setCredential`（A4）、OCR 草稿化（A3 余项）。FFI 共 **36 个导出**；`state()` 带 `kind` 与 `recycle`。
 
 **兼容性**：只增不改。`view()` 已加 `_id`；`entityDetail` / `editEntity` 保持。
 

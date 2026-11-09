@@ -284,6 +284,154 @@ pub fn import(store: &Store, bytes: &[u8], format: Format, opts: &ImportOptions)
     Ok(report)
 }
 
+/// 导入前的一条差异。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PreviewItem {
+    pub id: String,
+    /// 主键显示值（药名），UI 直接展示
+    pub name: String,
+    /// create / update / same
+    pub action: String,
+    /// 会被改掉的字段（用中文 label，不是 key）
+    pub changed: Vec<String>,
+    /// 其中属于「原样字段」的部分 —— 这些改动最危险，要单独点名
+    pub immutable: Vec<String>,
+}
+
+/// 导入预览：完全只读，不产生任何事件。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ImportPreview {
+    pub format: String,
+    pub total: usize,
+    pub create: usize,
+    pub update: usize,
+    pub same: usize,
+    pub items: Vec<PreviewItem>,
+    pub warnings: Vec<String>,
+    pub checksum: Option<String>,
+}
+
+/// 预演导入：把「将发生什么」逐条算出来给用户看。
+///
+/// 与 `import(dry_run=true)` 的区别：那个只回计数（entities/applied），
+/// 用户没法判断「这次导入会不会把我手改的用量覆盖掉」。这里给到字段粒度。
+///
+/// 完全只读：不调 `store.mutate`，不写事件，不改任何状态。
+pub fn preview_import(store: &Store, bytes: &[u8], format: Format) -> Result<ImportPreview> {
+    if !format.importable() {
+        return Err(Error::Codec(format!("{} 只支持导出，不支持导入", format.as_str())));
+    }
+    let schema = store.read(|m| m.schema.clone());
+    let payload: Payload = match format {
+        Format::Json => formats::from_json(bytes)?,
+        Format::Bundle => formats::from_bundle(bytes, true).map_err(Error::Codec)?,
+        Format::Csv | Format::Tsv => {
+            let sep = if format == Format::Csv { ',' } else { '\t' };
+            let s = schema
+                .as_ref()
+                .ok_or_else(|| Error::Codec("导入表格前需要先 init 一个领域 schema".into()))?;
+            formats::from_delimited(bytes, sep, s).map_err(Error::Codec)?
+        }
+        _ => unreachable!(),
+    };
+
+    let local = store.read(|m| m.entities_vec());
+    let mut items = Vec::with_capacity(payload.entities.len());
+    let mut warnings: Vec<String> = Vec::new();
+
+    for incoming in &payload.entities {
+        let primary = schema
+            .as_ref()
+            .and_then(|s| s.entity_def(&incoming.kind))
+            .and_then(|d| d.primary.clone())
+            .unwrap_or_else(|| "name".into());
+        let name = if incoming.display_of(&primary).is_empty() {
+            incoming.id.clone()
+        } else {
+            incoming.display_of(&primary)
+        };
+
+        let Some(now) = local.iter().find(|e| e.id == incoming.id) else {
+            items.push(PreviewItem {
+                id: incoming.id.clone(),
+                name,
+                action: "create".into(),
+                changed: Vec::new(),
+                immutable: Vec::new(),
+            });
+            continue;
+        };
+
+        let mut changed = Vec::new();
+        let mut immutable = Vec::new();
+        for (key, val) in &incoming.fields {
+            let same = now.get(key).map(|v| v.display()) == Some(val.display());
+            if same {
+                continue;
+            }
+            let label = schema
+                .as_ref()
+                .and_then(|s| s.field(&incoming.kind, key))
+                .map(|f| {
+                    if f.label.is_empty() {
+                        f.key.clone()
+                    } else {
+                        f.label.clone()
+                    }
+                })
+                .unwrap_or_else(|| key.clone());
+            let is_immutable = schema
+                .as_ref()
+                .map(|s| s.is_immutable(&incoming.kind, key))
+                .unwrap_or(false);
+            if is_immutable {
+                immutable.push(label.clone());
+            }
+            changed.push(label);
+        }
+        // 分组也是数据，换了药群同样要提示
+        if now.group_id != incoming.group_id {
+            changed.push("药群".into());
+        }
+
+        let action = if changed.is_empty() { "same" } else { "update" };
+        items.push(PreviewItem {
+            id: incoming.id.clone(),
+            name,
+            action: action.into(),
+            changed,
+            immutable,
+        });
+    }
+
+    let create = items.iter().filter(|i| i.action == "create").count();
+    let update = items.iter().filter(|i| i.action == "update").count();
+    let same = items.iter().filter(|i| i.action == "same").count();
+    let danger = items.iter().filter(|i| !i.immutable.is_empty()).count();
+    if danger > 0 {
+        warnings.push(format!(
+            "{danger} 条会改写「原样字段」（性味归经/用量/配伍禁忌这类），建议逐条核对"
+        ));
+    }
+    if update > 0 {
+        warnings.push(format!("{update} 条会覆盖本地已有字段（同名字段以导入内容为准）"));
+    }
+    if payload.entities.is_empty() {
+        warnings.push("这份内容里没有可导入的实体：CSV 需要 id 列，或改用「粘贴填充」按字段填".into());
+    }
+
+    Ok(ImportPreview {
+        format: format.as_str().into(),
+        total: items.len(),
+        create,
+        update,
+        same,
+        items,
+        warnings,
+        checksum: Some(payload.checksum()),
+    })
+}
+
 fn build_ops(
     store: &Store,
     p: &Payload,
@@ -408,6 +556,17 @@ id = "effect_to_name"
 clue_fields = ["effects"]
 answer_fields = ["name"]
 "#;
+
+    /// CSV 没有 kind 列时，实体类型要落到 schema 的第一个 kind。
+    /// 以前默认 "entity"，导致字段 label 匹配、immutable 判定、预览差异全部失效
+    /// （实测「功效」在预览里显示成 effects）。
+    #[test]
+    fn delimited_defaults_kind_to_schema_kind() {
+        let schema = DomainSchema::from_toml(SCHEMA).unwrap();
+        let csv = "id,name,effects,nature\n麻黄,麻黄,发汗|平喘,辛温\n";
+        let payload = formats::from_delimited(csv.as_bytes(), ',', &schema).unwrap();
+        assert_eq!(payload.entities[0].kind, "herb");
+    }
 
     fn tmp(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("mneme-codec-{}-{}-{}", name, std::process::id(), now_ms()))

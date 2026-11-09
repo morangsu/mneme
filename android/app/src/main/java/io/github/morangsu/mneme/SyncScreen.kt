@@ -4,8 +4,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -33,7 +31,7 @@ fun SyncScreen(onGoConflict: () -> Unit) {
     var importResult by remember { mutableStateOf<JSONObject?>(null) }
     var exportResult by remember { mutableStateOf<JSONObject?>(null) }
     var importText by remember { mutableStateOf("") }
-    var importDry by remember { mutableStateOf(false) }
+    var importPreview by remember { mutableStateOf<JSONObject?>(null) }
     var exportFormat by remember { mutableStateOf("bundle") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -175,20 +173,92 @@ fun SyncScreen(onGoConflict: () -> Unit) {
                 label = "导入内容（CSV / JSON / Bundle）",
                 maxLines = 6,
             )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Checkbox(
-                    checked = importDry,
-                    onCheckedChange = { importDry = it },
-                    colors = CheckboxDefaults.colors(checkedColor = MnemeColors.Accent),
-                )
-                Dim("仅预演（dry，不写库）")
+            // 先预览再写：导入是唯一会覆盖本地字段的操作，不能一键到底。
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GhostButton("预览差异", enabled = !busy && importText.isNotBlank(), onClick = {
+                    run({ Api.previewImport(importText, "ocr-or-paste.txt") }) { importPreview = it }
+                })
+                if (importPreview != null) {
+                    GhostButton("清空", onClick = {
+                        importPreview = null
+                        importResult = null
+                    })
+                }
             }
-            AccentButton("导入", enabled = !busy && importText.isNotBlank(), onClick = {
-                run({ Api.importData(importText, "ocr-or-paste.txt", importDry) }) { importResult = it }
-            })
+
+            importPreview?.let { pv ->
+                val create = pv.optInt("create", 0)
+                val update = pv.optInt("update", 0)
+                val same = pv.optInt("same", 0)
+                Panel {
+                    SectionTitle("预览（${pv.optString("format")}）")
+                    Text(
+                        "新增 $create · 覆盖 $update · 无变化 $same",
+                        color = MnemeColors.Text,
+                        fontSize = 13.sp,
+                    )
+                    val warns = pv.arrayOrEmpty("warnings")
+                    for (i in 0 until warns.length()) {
+                        Text("⚠ ${warns.optString(i)}", color = MnemeColors.Warn, fontSize = 11.sp)
+                    }
+                    val items = pv.arrayOrEmpty("items")
+                    val limit = minOf(items.length(), 20)
+                    for (i in 0 until limit) {
+                        val o = items.optJSONObject(i) ?: continue
+                        val action = o.optString("action")
+                        val tag = when (action) {
+                            "create" -> "新增"
+                            "update" -> "覆盖"
+                            else -> "无变化"
+                        }
+                        val color = when (action) {
+                            "create" -> MnemeColors.Ok
+                            "update" -> MnemeColors.Warn
+                            else -> MnemeColors.TextDim
+                        }
+                        val changed = o.readable("changed")
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Badge(tag, color)
+                            Text(
+                                o.optString("name"),
+                                color = MnemeColors.Text,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        if (changed.isNotBlank()) {
+                            Text(
+                                "  $changed",
+                                color = MnemeColors.TextDim,
+                                fontSize = 11.sp,
+                            )
+                        }
+                        val imm = o.readable("immutable")
+                        if (imm.isNotBlank()) {
+                            Text("  原样字段：$imm", color = MnemeColors.Danger, fontSize = 11.sp)
+                        }
+                    }
+                    if (items.length() > limit) {
+                        Dim("…还有 ${items.length() - limit} 条未列出")
+                    }
+                    if (create + update == 0) {
+                        Dim("这份内容和库里一致，导入不会改变任何东西")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AccentButton(
+                        text = if (create + update > 0) "确认写入 ${create + update} 条" else "仍然导入",
+                        enabled = !busy,
+                        onClick = {
+                            run({ Api.importData(importText, "ocr-or-paste.txt", false) }) {
+                                importResult = it
+                                importPreview = null
+                            }
+                        },
+                    )
+                    GhostButton("取消", onClick = { importPreview = null })
+                }
+            }
+
             importResult?.let { Panel { SectionTitle("导入结果"); Receipt(it) } }
         }
 

@@ -1193,6 +1193,24 @@ pub fn sync(target_id: String, dry: bool) -> String {
     })
 }
 
+/// 导入前预览：逐条告诉你「会新增什么、会覆盖什么、哪些是原样字段」。
+///
+/// 只读，不写库。UI 应该在真正 `importData` 之前调用它。
+#[uniffi::export]
+pub fn preview_import(content: String, filename: String) -> String {
+    call(|a| {
+        let bytes = content.as_bytes();
+        let fmt = codec::detect(Some(Path::new(&filename)), bytes);
+        if !fmt.importable() {
+            return err(format!("{fmt} 不支持导入"));
+        }
+        match codec::preview_import(&a.store, bytes, fmt) {
+            Ok(p) => json!(p),
+            Err(e) => err(e),
+        }
+    })
+}
+
 #[uniffi::export]
 pub fn import_data(content: String, filename: String, dry: bool) -> String {
     call(|a| {
@@ -1607,6 +1625,23 @@ mod tests {
             "测试药".into(),
         );
         assert!(!dup_self.contains("\"id\":\"测试药\""), "{dup_self}");
+
+        // ---- A3：导入预览（逐条差异，只读） ----
+        let csv = "id,name,effects\n测试药,测试药,全新功效\n新药X,新药X,某功效\n";
+        let pv: Json = serde_json::from_str(&preview_import(csv.into(), "x.csv".into())).unwrap();
+        assert_eq!(pv["create"].as_u64(), Some(1), "{pv}");
+        assert_eq!(pv["update"].as_u64(), Some(1), "{pv}");
+        let items = pv["items"].as_array().unwrap();
+        let upd = items.iter().find(|i| i["id"] == "测试药").unwrap();
+        assert_eq!(upd["action"], "update");
+        assert!(
+            upd["changed"].as_array().unwrap().iter().any(|c| c == "功效"),
+            "差异要报到字段：{pv}"
+        );
+        // 预览必须只读：事件数不该变
+        let before_rev = state();
+        let _ = preview_import(csv.into(), "x.csv".into());
+        assert_eq!(before_rev, state(), "预览不能写库");
 
         let _ = fs::remove_dir_all(&root);
     }

@@ -781,6 +781,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -825,6 +827,8 @@ fun uniffi_mneme_ffi_checksum_func_list_deleted(
 fun uniffi_mneme_ffi_checksum_func_open_database(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_parse_paste(
+): Short
+fun uniffi_mneme_ffi_checksum_func_preview_import(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_quiz(
 ): Short
@@ -940,6 +944,8 @@ fun uniffi_mneme_ffi_fn_func_list_deleted(uniffi_out_err: UniffiRustCallStatus,
 fun uniffi_mneme_ffi_fn_func_open_database(`path`: RustBuffer.ByValue,`device`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_parse_paste(`text`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_preview_import(`content`: RustBuffer.ByValue,`filename`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_quiz(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1150,6 +1156,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_parse_paste() != 38243.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_preview_import() != 63842.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_quiz() != 42537.toShort()) {
@@ -1637,6 +1646,20 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_parse_paste(
         FfiConverterString.lower(`text`),FfiConverterString.lower(`kind`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 导入前预览：逐条告诉你「会新增什么、会覆盖什么、哪些是原样字段」。
+         *
+         * 只读，不写库。UI 应该在真正 `importData` 之前调用它。
+         */ fun `previewImport`(`content`: kotlin.String, `filename`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_preview_import(
+        FfiConverterString.lower(`content`),FfiConverterString.lower(`filename`),_status)
 }
     )
     }

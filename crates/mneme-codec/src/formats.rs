@@ -234,12 +234,19 @@ pub fn from_delimited(
             continue;
         }
         let kind = get("kind");
-        let mut e = Entity::new(
-            id.clone(),
-            if kind.is_empty() { "entity".into() } else { kind },
-            "import",
-            0,
-        );
+        // 没有 kind 列时不要退化成 "entity"：单领域库里表头往往是
+        // `id,name,功效…`，退化成 "entity" 会让所有字段名与 label 匹配失效
+        // （预览里「功效」变成 effects，导入后也不认识 immutable 字段）。
+        let kind = if kind.is_empty() {
+            schema
+                .entities
+                .first()
+                .map(|e| e.kind.clone())
+                .unwrap_or_else(|| "entity".into())
+        } else {
+            kind
+        };
+        let mut e = Entity::new(id.clone(), kind, "import", 0);
         e.rev = get("rev").parse().unwrap_or(1);
         let gid = get("group_id");
         if !gid.is_empty() {

@@ -13,6 +13,7 @@ import io.github.morangsu.mneme.ffi.entityHistory as ffiEntityHistory
 import io.github.morangsu.mneme.ffi.entityTemplate as ffiEntityTemplate
 import io.github.morangsu.mneme.ffi.listDeleted as ffiListDeleted
 import io.github.morangsu.mneme.ffi.parsePaste as ffiParsePaste
+import io.github.morangsu.mneme.ffi.previewImport as ffiPreviewImport
 import io.github.morangsu.mneme.ffi.restoreEntity as ffiRestoreEntity
 import io.github.morangsu.mneme.ffi.undoEdit as ffiUndoEdit
 import io.github.morangsu.mneme.ffi.editEntity as ffiEditEntity
@@ -92,6 +93,10 @@ object MnemeApi {
 
     /** 把一段中文文本解析成字段；认不出的行原样返回。 */
     fun parsePaste(text: String, kind: String): String = ffiParsePaste(text, kind)
+
+    /** 导入预览：逐条差异，只读。 */
+    fun previewImport(content: String, filename: String): String =
+        ffiPreviewImport(content, filename)
 
     /** 查重：同名 / 同义名 / 近似名；excludeId 传自己时不会「和自己重复」。 */
     fun checkDuplicate(kind: String, fieldsJson: String, excludeId: String): String =
