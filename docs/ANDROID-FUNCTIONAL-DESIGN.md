@@ -35,8 +35,8 @@
 | 自动评分 | ❌ | 判分只返回对错，不动评分 |
 | 错题本 | ❌ | 无「连续答错」聚合 |
 | 掌握度 | 🟡 | 手工文本字段，与 SRS 双真相 |
-| 搜索 | ❌ | 只有"线索反查"，不能按名字/拼音找 |
-| 凭据安全 | 🟡 | 明文 `shared_prefs` + `sync.json` |
+| 搜索 | ✅ | 跨字段 + 同义名 + 拼音首字母（`mh`→麻黄），多词 AND，无结果退 OR |
+| 凭据安全 | ✅ | Android Keystore（AES-256-GCM），`sync.json` 只存 `${SECRET:名字}` |
 
 ---
 
@@ -156,11 +156,14 @@
 - **操作**：编辑、复制为新、删除、查看历史。
 - **验收**：从矩阵/搜索/反查任一入口进入，看到同一份数据。
 
-#### F-LIB-02 搜索
-- **能力**：按主键、同义词、功效、应用做子串/前缀匹配；结果按「主键命中 > 同义词 > 反向索引」排序。
-- **接口**：`search(query, limit)` → `[{id, name, group, snippet, score}]`。
-- **边界**：空串不查；单字查询允许（中文单字有意义）。
-- **验收**：输入「麻黄」命中；输入「发汗」按功效命中多味。
+#### F-LIB-02 搜索（已实现，2026-11-10）
+- **能力**：全字段子串 + 同义名 + **拼音首字母** + 分组路径（含祖先章节）匹配。
+- **排序**：主键全等 1000 > 前缀 700 > 包含 500 > 同义名 450 > 首字母前缀 400 > 首字母包含 300 > 字段 200 递减 > 分组 150。同分按名字长度（短的更像目标）。
+- **多词**：默认 AND（可跨字段）；一条都没有时退化成 OR，返回 `mode="or"`，UI 明示「已改为命中任意一个词」。
+- **接口**：`search(query, limit)` → `{hits:[{id,name,kind,group,score,via,field,label,snippet}], total, mode, terms}`；`limit=0` 按 50 截断。
+- **边界**：空串返回空；`via` 区分 name/synonym/pinyin/field/group（拼音命中要在 UI 标出来，否则像搜出了无关条目）；**只做首字母，不做全拼**（全拼数据量大一个数量级）；扩展 A 之后的生僻字不进首字母表，但仍能被子串搜到。
+- **实现**：`crates/mneme-core/src/search.rs`（纯函数，线性扫描，不建二级索引）+ `pinyin.rs`（`tools/pinyin-gen` 生成 20,902 字节首字母表）。
+- **验收**：真机输入 `mh` 命中麻黄（带「拼音」徽标）；「宣肺」按功效命中并显示片段与字段标签。
 
 #### F-LIB-03 历史时间线
 - **内容**：该条目字段级变更列表（时间、设备、字段、从→到）。
@@ -183,11 +186,17 @@
 #### F-DATA-02 公共库拉取（已有）
 - 补：`unchanged` 与非 `unchanged` 文案区分（已修）；拉取前展示「新增/自动合并/冲突」预估。
 
-#### F-DATA-03 凭据安全
-- **目标**：`sync.json` 不含明文 token。
-- **方案**：Kotlin 用 Android Keystore（EncryptedSharedPreferences）保存 token；`configureSync` 时注入内存；Rust 落盘时把 token 写成占位符 `"${CREDENTIAL:github-token}"`；冷启动由 Kotlin 读 Keystore 后注入。
-- **接口**：`configureSync(configJson)` 增加约定字段 `credential_ref`；`setCredential(name, value)`（内存）。
-- **验收**：`run-as cat sync.json` 看不到 `ghp_`；杀进程重启后同步仍可用。
+#### F-DATA-03 凭据安全（已实现，2026-11-10）
+- **目标**：磁盘上任何位置都不出现真 token；换机后旧密文不可解。
+- **方案**：
+  - Kotlin `Vault` 用 Android **Keystore** 的 AES-256-GCM 密钥加密，密文存 `shared_prefs/mneme_vault.xml`（`v1:iv:ct`）。不用 `EncryptedSharedPreferences`（Jetpack Security 已废弃，而它做的正是这件事）。
+  - `sync.json` 里 token 字段写引用 `${SECRET:github-private}`；**没有额外的 `credential_ref` 字段** —— 让引用就长在凭据字段本身，避免「引用与实际字段不一致」这类只能靠约定维持的状态。
+  - Rust 侧注册表只在**进程内存**（`mneme-sync::secret`），每次启动由 `Credentials.bootstrap` 从 Keystore 解密后注入，进程退出即失效。
+  - 解析支持 `${ENV:VAR}`（桌面/CI）与 `${SECRET:名字}`（宿主注入）两种；缺失就明确报「未注入」，**不会**拿占位符当 token 去请求。
+  - `TargetConfig` 手写 `Debug`：token/password/secret_key 一律打码，`{:?}` 带不进日志与 panic。
+- **接口**：`setCredential(name, secret)` / `clearCredential(name)` / `credentials()`（只回名字）/ `reloadSync()`。
+- **迁移**：升级后首次启动把 `shared_prefs` 与 `sync.json` 里的历史明文搬进 Keystore，并把磁盘改成引用；**先就地改 sync.json 再用 sp 兜底**（反过来会用 sp 的空值把 `path`/`branch` 覆盖掉，实测踩过）。
+- **验收**：`run-as grep -r ghp_ files shared_prefs` 无结果；杀掉进程重启后同步仍能发出请求（真实 token 返回 200/其他，而不是「未注入」）；清除凭据后立刻变「未注入」（说明后端缓存不会留住旧 token）。
 
 #### F-DATA-04 导入导出（已有）
 - 补：导入前差异预览（新增/更新/冲突计数），可取消。
@@ -264,6 +273,11 @@ Idle → Fetch(public/private) → Push(events) → Commit → Done(receipt)
 | `listDeleted` | — | `{items:[{id,name,deleted_at}]}` | 回收站 |
 | `history` | `entityId` | `{items:[{rev,ts,device,changes}]}` | 从事件日志推导 |
 | `undoEdit` | `entityId` | `{ok,rev,restored:[keys]}` | 仅本会话最近一次 |
+| `search` | `query`, `limit` | `{hits:[…],total,mode,terms}` | 全字段 + 同义名 + 拼音首字母；`limit=0` 按 50 截断 |
+| `setCredential` | `name`, `secret` | `{ok,name,rebuilt}` | 只进进程内存；注入后重建引擎（清掉带旧 token 的后端缓存） |
+| `clearCredential` | `name` | `{ok,removed,rebuilt}` | 之后引用它的目标明确报「未注入」 |
+| `credentials` | — | `{items:[名字],count}` | 只回名字，绝不回值 |
+| `reloadSync` | — | `{ok,configured,targets}` | 按 `sync.json` 重建引擎，不写盘 |
 | `quizQueue` | `newLimit`, `dueLimit` | `{due,new,items}` | 每日配额 |
 | `suggestGrade` | `cardId`, `correct`, `elapsedMs` | `{grade,reason}` | 纯函数 |
 | `weakCards` | `limit` | `{items:[...]}` | 错题本 |
@@ -406,9 +420,9 @@ UI 从「勾选仅预演 + 导入」改成「预览差异 → 确认写入 N 条
 | 6 | 自动评分 | 4 档建议符合 §3.2 表格 |
 | 7 | 错题本 | 连错 2 次进入，连对 2 次移出 |
 | 8 | 掌握度派生 | 复习后自动改，手工覆盖 30 天 |
-| 9 | 搜索 | 主键/同义词/功效三路命中 |
+| 9 | 搜索 | 药名/同义名/功效字段/拼音首字母四路命中，片段带上下文（真机已验 `mh`→麻黄） |
 | 10 | 拉公共库冲突 | 逐项裁决，未决不写（已实测，回归即可） |
-| 11 | 凭据 | `sync.json` 无明文 token，重启后仍能同步 |
+| 11 | 凭据 | 磁盘无 `ghp_`（真机 `grep -r` 已验）；重启后仍能发出请求；清除后立即报「未注入」 |
 | 12 | 全链路 | 新建 → 复习 → 同步 → 另一设备拉取，数据一致 |
 
 ---

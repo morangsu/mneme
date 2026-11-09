@@ -13,26 +13,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
-import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * 同步凭据配置。
  *
- * Rust 侧只认 `sync.json`（SyncConfig），凭据不硬编码在代码里；这里把用户输入
- * 组装成同样的 JSON，通过 `configureSync` 落盘并重建引擎，不需要重启 APP。
+ * 凭据的存放：**Android Keystore**（`Vault`），不写 `SharedPreferences` 明文、
+ * 不写 `sync.json` 明文。落盘配置里只有 `${SECRET:github-private}` 这个引用；
+ * 真值在进程内存里，进程退出即消失，下次启动由 `Credentials.bootstrap` 重新注入。
  *
- * token 存在 APP 私有目录（`SharedPreferences` + `filesDir/mneme/data/sync.json`），
- * 不出沙箱、不进日志。换机或撤销时，在 GitHub 设置里删掉这个 token 即可。
+ * 换机 / 撤销：去 GitHub 设置里删掉这个 token，然后在这里「清除凭据」。
  */
 @Composable
 fun SyncSettingsPanel(onSaved: () -> Unit = {}) {
     val ctx = LocalContext.current
     val sp = remember { ctx.getSharedPreferences("mneme_sync", Context.MODE_PRIVATE) }
-    var token by remember { mutableStateOf(sp.getString("token", "").orEmpty()) }
+    // token 输入框故意**不回填**：回填就等于把明文重新显示在屏幕上，截图/录屏都会带走它
+    var token by remember { mutableStateOf("") }
     var owner by remember { mutableStateOf(sp.getString("owner", "morangsu").orEmpty()) }
     var repo by remember { mutableStateOf(sp.getString("repo", "mneme-data-private").orEmpty()) }
     var path by remember { mutableStateOf(sp.getString("path", "data").orEmpty()) }
+    var saved by remember { mutableStateOf(Credentials.hasToken(ctx)) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var receipt by remember { mutableStateOf<JSONObject?>(null) }
@@ -40,7 +41,17 @@ fun SyncSettingsPanel(onSaved: () -> Unit = {}) {
 
     Panel(title = "连接配置（GitHub 私有库）") {
         Dim("同步只连私有库：每台设备各写自己的事件分片，快照与决策日志同仓可溯源。")
-        MnemeTextField(token, { token = it.trim() }, "Personal access token（ghp_… / github_pat_…）", singleLine = true)
+        Dim(
+            if (saved) "凭据：已保存在系统密钥库（Android Keystore）。留空表示不修改。"
+            else "凭据：未保存。粘贴一次 token 即可，之后只存在密钥库里，不会明文落盘。",
+        )
+        MnemeTextField(
+            token,
+            { token = it.trim() },
+            if (saved) "新的 personal access token（留空则不修改）"
+            else "personal access token（ghp_… / github_pat_…）",
+            singleLine = true,
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MnemeTextField(
                 owner, { owner = it.trim() }, "owner",
@@ -54,50 +65,54 @@ fun SyncSettingsPanel(onSaved: () -> Unit = {}) {
         MnemeTextField(path, { path = it.trim() }, "仓库内路径（留空为根）", singleLine = true)
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AccentButton("保存并启用", enabled = !busy && token.isNotBlank() && owner.isNotBlank() && repo.isNotBlank()) {
+            AccentButton(
+                "保存并启用",
+                enabled = !busy && (token.isNotBlank() || saved) &&
+                    owner.isNotBlank() && repo.isNotBlank(),
+            ) {
                 scope.launch {
                     busy = true
                     error = null
-                    val cfg = JSONObject()
-                        .put("device_id", Db.deviceId(ctx))
-                        .put(
-                            "targets",
-                            JSONArray().put(
-                                JSONObject()
-                                    .put("kind", "github")
-                                    .put("id", "github-private")
-                                    .put("token", token)
-                                    .put("owner", owner)
-                                    .put("repo", repo)
-                                    .put("branch", "main")
-                                    .put("path", path),
-                            ),
+                    val err = if (token.isNotBlank()) {
+                        // 新 token：入箱 → 注入内存 → 重建配置
+                        Credentials.saveToken(ctx, token, owner, repo, path)
+                    } else {
+                        // 没填新 token：只改仓库信息，凭据沿用保险箱里的
+                        val r = Api.configureSync(
+                            Credentials.buildConfig(ctx, owner, repo, path).toString(),
                         )
-                        .put("exclude", JSONArray())
-                        .put("max_retries", 3)
-                        .put("upload_snapshots", true)
-                        .put("keep_snapshots", 30)
-                    val r = Api.configureSync(cfg.toString())
+                        r.err()
+                    }
                     busy = false
-                    if (r.err() != null) {
-                        error = r.err()
+                    if (err != null) {
+                        error = err
                     } else {
                         sp.edit()
-                            .putString("token", token)
                             .putString("owner", owner)
                             .putString("repo", repo)
                             .putString("path", path)
                             .apply()
-                        receipt = r
+                        token = ""
+                        saved = Credentials.hasToken(ctx)
+                        receipt = JSONObject()
+                            .put("ok", true)
+                            .put("target", Credentials.GITHUB)
+                            .put("token", "已存入 Keystore")
                         onSaved()
                     }
                 }
             }
-            if (token.isNotBlank()) {
+            if (saved) {
                 GhostButton("清除凭据", enabled = !busy) {
-                    token = ""
-                    sp.edit().remove("token").apply()
-                    receipt = null
+                    scope.launch {
+                        busy = true
+                        Credentials.forget(ctx)
+                        busy = false
+                        saved = false
+                        token = ""
+                        receipt = null
+                        error = null
+                    }
                 }
             }
         }

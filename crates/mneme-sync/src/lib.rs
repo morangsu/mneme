@@ -15,11 +15,13 @@ pub mod config;
 pub mod engine;
 pub mod error;
 pub mod incremental;
+pub mod secret;
 pub mod targets;
 pub mod traits;
 
 pub use config::{SyncConfig, TargetConfig};
 pub use engine::{SyncEngine, SyncReport};
 pub use error::{Error, Result};
+pub use secret::{clear as clear_secrets, names as secret_names, put as put_secret};
 pub use targets::build_target;
 pub use traits::{RemoteMeta, SyncTarget};

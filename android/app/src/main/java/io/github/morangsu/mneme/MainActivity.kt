@@ -35,7 +35,12 @@ class MainActivity : ComponentActivity() {
         }
 
         // 把数据目录与 deviceId 交给 Rust 侧（本地 SQLite 由 mneme-store 管理）。
-        lifecycleScope.launch { Db.init(this@MainActivity) }
+        // 开库之后立刻把 Keystore 里的凭据注入 Rust 内存——Rust 侧的凭据注册表是进程级的，
+        // 进程每次重启都会空，配置里只有 `${SECRET:…}` 引用，没注入就同步不了。
+        lifecycleScope.launch {
+            Db.init(this@MainActivity)
+            Credentials.bootstrap(this@MainActivity)
+        }
 
         // 后台周期同步：联网时每小时跑一次，唯一任务避免重复堆叠。
         enqueueSyncWorker()

@@ -254,7 +254,8 @@ RUSTFLAGS="-C target-cpu=native" cargo build --release   # 本机极致档
 - `PublicBundle` 只含 `base_fields`（13 个），`mastery/synonyms/boundary/notes/processing` 等个人字段一律剔除，绝不外发；
 - GitHub Contents API 每次 PUT 都是一个 commit；`manifest.json`、`sync/log.jsonl`、`sync/upstream-decisions.jsonl` 让每次同步与每次裁决都可溯源；
 - 公共库用 `If-None-Match` 条件请求（匿名 60/h 配额），命中 304 不解析；命中限流明确报错而非重试打爆；
-- 凭据写 `${ENV:MNEME_GITHUB_TOKEN}`，不落明文；私有库 target id = `github-private`。
+- 凭据两种写法都不落明文：桌面/CI 用 `${ENV:MNEME_GITHUB_TOKEN}`，宿主注入用 `${SECRET:名字}`
+  （Android 由 Keystore 解密后 `setCredential` 注入进程内存，进程退出即失效）；私有库 target id = `github-private`。
 
 ## C. 冲突规则（用户特别强调的部分，已做成硬约束）
 

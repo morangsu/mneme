@@ -70,6 +70,7 @@ fun MatrixScreen() {
     var batchPaste by remember { mutableStateOf(false) }
     var recycle by remember { mutableStateOf(false) }
     var groupMgr by remember { mutableStateOf(false) }
+    var searching by remember { mutableStateOf(false) }
     var kind by remember { mutableStateOf("herb") }
     // 手机屏一行放不下 4 列长文本：默认卡片（全文换行），要横向比较再切表格
     var cardMode by remember { mutableStateOf(true) }
@@ -134,6 +135,7 @@ fun MatrixScreen() {
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    GhostButton("检索", onClick = { searching = true })
                     GhostButton("＋ 新建", onClick = { creating = true })
                     GhostButton("批量粘贴", onClick = { batchPaste = true })
                     GhostButton("分组", onClick = { groupMgr = true })
@@ -288,6 +290,16 @@ fun MatrixScreen() {
         }
     }
 
+    if (searching) {
+        // 检索页点结果直接进编辑面板：搜到就是为了看/改，不再多一次跳转
+        SearchScreen(
+            onDismiss = { searching = false },
+            onOpen = {
+                searching = false
+                editing = it
+            },
+        )
+    }
     editing?.let { id ->
         EntityEditorDialog(
             entityId = id,

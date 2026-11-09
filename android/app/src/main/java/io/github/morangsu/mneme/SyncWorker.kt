@@ -15,6 +15,10 @@ class SyncWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result = try {
+        // 后台进程可能是被 WorkManager 冷启动的：先开库、再注入凭据，顺序不能反，
+        // 因为 `${SECRET:…}` 是在建同步后端时解析的。
+        Db.init(applicationContext)
+        Credentials.bootstrap(applicationContext)
         val receipt = Api.sync("github-private", false)
         if (receipt.has("error")) {
             Result.retry()

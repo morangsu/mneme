@@ -132,13 +132,13 @@
 
 | 项 | 现状 | 目标 |
 | --- | --- | --- |
-| Android token 存储 | 明文 `shared_prefs` + `sync.json` | Android Keystore（EncryptedSharedPreferences），`sync.json` 只存引用 |
+| Android token 存储 | ~~明文 `shared_prefs` + `sync.json`~~ **已改**：Keystore AES-GCM，`sync.json` 只存 `${SECRET:名字}`（2026-11-10 真机验过） | Android Keystore（EncryptedSharedPreferences），`sync.json` 只存引用 |
 | 网页 token | localStorage + 请求头 | 服务端 session cookie（HttpOnly），token 只在服务端内存/文件 |
 | 日志 | 未打印 token（已注意） | 加一条断言：任何日志出现 `ghp_` 前缀即视为 bug |
 
 ### P1（M3）
 
-- 全文搜索（跨字段模糊 + 拼音首字母）
+- ~~全文搜索（跨字段模糊 + 拼音首字母）~~ **已完成**：`mneme_core::search`（全字段 + 同义名 + 首字母 + 分组路径，多词 AND→OR 回退），FFI `search`，安卓检索页
 - 批量操作（多选改 mastery / 批量加标签）
 - 多领域并存与切换（现在一个库一个 schema，切领域要开新库）
 - 统计看板（每日复习量、留存曲线、薄弱药群）
@@ -325,6 +325,6 @@ SRS 状态 → 三档：
 3. `notes` 在 `topology.personal_fields` 里，但 `materia-medica.toml` 未定义该字段 → 无处写笔记。
 4. `Group` 实体存在但库里 0 条，药群共性/治法无处存放，矩阵只能按 `group_name` 字符串分组。
 5. 无新建/删除 UI，`immutable` 被拒后用户无路可走。
-6. token 明文（Android `shared_prefs`/`sync.json`；网页 localStorage）。
+6. ~~token 明文（Android `shared_prefs`/`sync.json`；网页 localStorage）~~ —— Android 侧已修（Keystore + `${SECRET:}`），**网页 localStorage 仍未修**。
 7. 复习无每日配额/错题集合，`due_cards` 一次取全部（`limit = cards.len()`）。
 8. FSRS 有实现（含 `fit()`）但未接入，SM2 是唯一在用调度器。

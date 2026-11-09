@@ -26,6 +26,9 @@ android/local.properties
 # 由 cargo build --target aarch64-linux-android 生成，不进仓库
 android/app/src/main/jniLibs/*/lib*.so
 
+# 离线生成首字母表的小工具（独立 crate，不进 workspace）
+tools/pinyin-gen/target/
+
 # ---- 本地实验产物 ----
 /.tmp
 /.shots

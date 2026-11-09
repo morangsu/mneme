@@ -795,6 +795,16 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -814,11 +824,15 @@ internal interface IntegrityCheckingUniffiLib : Library {
 ): Short
 fun uniffi_mneme_ffi_checksum_func_check_duplicate(
 ): Short
+fun uniffi_mneme_ffi_checksum_func_clear_credential(
+): Short
 fun uniffi_mneme_ffi_checksum_func_configure_sync(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_create_entities(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_create_entity(
+): Short
+fun uniffi_mneme_ffi_checksum_func_credentials(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_delete_entity(
 ): Short
@@ -856,6 +870,8 @@ fun uniffi_mneme_ffi_checksum_func_quiz_plan(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_quiz_queue(
 ): Short
+fun uniffi_mneme_ffi_checksum_func_reload_sync(
+): Short
 fun uniffi_mneme_ffi_checksum_func_restore_entity(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_reverse(
@@ -863,6 +879,10 @@ fun uniffi_mneme_ffi_checksum_func_reverse(
 fun uniffi_mneme_ffi_checksum_func_review(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_review_config(
+): Short
+fun uniffi_mneme_ffi_checksum_func_search(
+): Short
+fun uniffi_mneme_ffi_checksum_func_set_credential(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_set_entity_group(
 ): Short
@@ -943,11 +963,15 @@ internal interface UniffiLib : Library {
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_check_duplicate(`kind`: RustBuffer.ByValue,`fieldsJson`: RustBuffer.ByValue,`excludeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_clear_credential(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_configure_sync(`configJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_create_entities(`kind`: RustBuffer.ByValue,`itemsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_create_entity(`kind`: RustBuffer.ByValue,`fieldsJson`: RustBuffer.ByValue,`idHint`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_credentials(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_delete_entity(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -985,6 +1009,8 @@ fun uniffi_mneme_ffi_fn_func_quiz_plan(uniffi_out_err: UniffiRustCallStatus,
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_quiz_queue(`newLimit`: Int,`dueLimit`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_reload_sync(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_restore_entity(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_reverse(`cluesJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -992,6 +1018,10 @@ fun uniffi_mneme_ffi_fn_func_reverse(`cluesJson`: RustBuffer.ByValue,uniffi_out_
 fun uniffi_mneme_ffi_fn_func_review(`cardId`: RustBuffer.ByValue,`grade`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_review_config(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_search(`query`: RustBuffer.ByValue,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_set_credential(`name`: RustBuffer.ByValue,`secret`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_set_entity_group(`entityId`: RustBuffer.ByValue,`groupId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1155,6 +1185,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_check_duplicate() != 127.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mneme_ffi_checksum_func_clear_credential() != 7915.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mneme_ffi_checksum_func_configure_sync() != 38613.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1162,6 +1195,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_create_entity() != 8125.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_credentials() != 52983.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_delete_entity() != 63764.toShort()) {
@@ -1218,6 +1254,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_quiz_queue() != 53920.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mneme_ffi_checksum_func_reload_sync() != 50384.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mneme_ffi_checksum_func_restore_entity() != 18817.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1228,6 +1267,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_review_config() != 10871.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_search() != 36410.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_set_credential() != 29267.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_set_entity_group() != 62466.toShort()) {
@@ -1549,6 +1594,18 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     
 
         /**
+         * 移除一条内存凭据。之后任何引用它的目标都会明确报「未注入」，而不是拿空 token 去请求。
+         */ fun `clearCredential`(`name`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_clear_credential(
+        FfiConverterString.lower(`name`),_status)
+}
+    )
+    }
+    
+
+        /**
          * 写入 `sync.json` 并立即重建同步引擎，不需要重启 APP。
          *
          * `config_json` 就是 `SyncConfig` 的 JSON（含 `targets` 数组）；凭据允许直接写明文，
@@ -1588,6 +1645,18 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_create_entity(
         FfiConverterString.lower(`kind`),FfiConverterString.lower(`fieldsJson`),FfiConverterString.lower(`idHint`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 已注入的凭据名（不含值）。UI 用来显示「已保存 / 未保存」。
+         */ fun `credentials`(): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_credentials(
+        _status)
 }
     )
     }
@@ -1810,6 +1879,20 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     
 
         /**
+         * 重读 `sync.json` 并重建同步引擎（凭据注入之后调用）。
+         *
+         * 与 `configureSync` 的区别：不写盘、不改配置，只让新的凭据生效。
+         */ fun `reloadSync`(): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_reload_sync(
+        _status)
+}
+    )
+    }
+    
+
+        /**
          * 从回收站恢复（写一条 deleted=false 的新快照，历史里会多一条 restore）。
          */ fun `restoreEntity`(`entityId`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
@@ -1846,6 +1929,41 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_review_config(
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * 跨字段检索：子串 + 同义名 + 拼音首字母（`mh` → 麻黄）。
+         *
+         * 多词默认 AND（`麻黄 解表` 要求两个词都命中，可在不同字段）；AND 一条都没有时
+         * 才退化成 OR，返回的 `mode` 字段会告诉 UI 当前是哪种，避免用户以为搜错了。
+         *
+         * `limit = 0` 时按 50 条截断（手机上一屏也放不下更多）；`total` 始终是截断前的总数。
+         */ fun `search`(`query`: kotlin.String, `limit`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_search(
+        FfiConverterString.lower(`query`),FfiConverterUInt.lower(`limit`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 注入一条凭据到**进程内存**。宿主负责持久化与加密（Android 走 Keystore）。
+         *
+         * 为什么要多这一跳：`sync.json` 里只写 `${SECRET:github-private}`，真值不落盘。
+         * APP 启动时从系统密钥库解密 → 调本方法注入 → 再 `reloadSync()` 重建引擎。
+         * 进程退出即失效，重启后必须重新注入。
+         *
+         * 返回值只含名字，**绝不回显凭据本身**。
+         */ fun `setCredential`(`name`: kotlin.String, `secret`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_set_credential(
+        FfiConverterString.lower(`name`),FfiConverterString.lower(`secret`),_status)
 }
     )
     }

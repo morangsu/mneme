@@ -580,3 +580,112 @@ fn group_path_names_resolves_chain() {
     assert_eq!(path_names(&groups, "c"), vec!["章", "节", "药群"]);
     assert!(path_names(&groups, "不存在").is_empty());
 }
+
+// ---------------------------------------------------------------- 检索（A4）
+
+fn search_herb(id: &str, name: &str, group: &str, effects: &[&str], nature: &str) -> Entity {
+    let mut e = Entity::new(id, "herb", "test", 1);
+    e.set("name", Value::Text(name.into()), 1);
+    e.set("group_name", Value::Text(group.into()), 1);
+    e.set(
+        "effects",
+        Value::Tags(effects.iter().map(|s| s.to_string()).collect()),
+        1,
+    );
+    e.set("nature", Value::Text(nature.into()), 1);
+    e
+}
+
+fn demo() -> Vec<Entity> {
+    vec![
+        search_herb(
+            "麻黄",
+            "麻黄",
+            "发散风寒药",
+            &["发汗解表", "宣肺平喘", "利水消肿"],
+            "辛、微苦，温。归肺、膀胱经",
+        ),
+        search_herb(
+            "桂枝",
+            "桂枝",
+            "发散风寒药",
+            &["发汗解肌", "温通经脉", "助阳化气"],
+            "辛、甘，温。归心、肺、膀胱经",
+        ),
+        search_herb(
+            "苦杏仁",
+            "苦杏仁",
+            "止咳平喘药",
+            &["降气止咳平喘", "润肠通便"],
+            "苦，微温。有小毒。归肺、大肠经",
+        ),
+        search_herb("石膏", "石膏", "清热泻火药", &["清热泻火", "除烦止渴"], "甘、辛，大寒。归肺、胃经"),
+    ]
+}
+
+#[test]
+fn search_ranks_name_over_field_and_keeps_snippet() {
+    let s = full_schema();
+    let es = demo();
+    let r = mneme_core::search(&s, &es, &[], "麻黄", None, 10);
+    assert_eq!(r.hits[0].id, "麻黄");
+    assert_eq!(r.hits[0].via, mneme_core::SearchVia::Name);
+
+    let r = mneme_core::search(&s, &es, &[], "宣肺", None, 10);
+    assert_eq!(r.hits[0].id, "麻黄");
+    assert_eq!(r.hits[0].via, mneme_core::SearchVia::Field);
+    assert_eq!(r.hits[0].label, "功效");
+    assert!(r.hits[0].snippet.contains("宣肺平喘"));
+}
+
+#[test]
+fn search_understands_pinyin_initials() {
+    // 用户敲键盘首字母比打拼音更省事：mh → 麻黄，kxr → 苦杏仁
+    let s = full_schema();
+    let es = demo();
+    let r = mneme_core::search(&s, &es, &[], "mh", None, 10);
+    assert_eq!(r.hits[0].id, "麻黄");
+    assert_eq!(r.hits[0].via, mneme_core::SearchVia::Pinyin);
+    let r = mneme_core::search(&s, &es, &[], "kxr", None, 10);
+    assert_eq!(r.hits[0].id, "苦杏仁");
+    // 多字母全拼不做：只认首字母，避免「mahuang」被误判成药名包含
+    assert!(mneme_core::search(&s, &es, &[], "mahuang", None, 10).hits.is_empty());
+}
+
+#[test]
+fn search_multi_term_and_or_modes() {
+    let s = full_schema();
+    let es = demo();
+    // 药名 + 功效，两个词都命中
+    let r = mneme_core::search(&s, &es, &[], "麻黄 宣肺", None, 10);
+    assert_eq!(r.mode, "and");
+    assert_eq!(r.hits.len(), 1);
+    // 有一个词谁都命中不了 → 退回 OR，并如实告诉 UI
+    let r = mneme_core::search(&s, &es, &[], "平喘 不存在的词", None, 10);
+    assert_eq!(r.mode, "or");
+    assert!(r.hits.iter().all(|h| h.id == "麻黄" || h.id == "苦杏仁"));
+}
+
+#[test]
+fn search_matches_ancestor_group_path() {
+    // 多级分组做了，检索就得跟上：搜「解表药」应该命中它下面的「发散风寒药」里的药
+    let s = full_schema();
+    let groups = vec![
+        grp("ch1", "解表药", None),
+        grp("sec1", "发散风寒药", Some("ch1")),
+    ];
+    let mut e = search_herb(
+        "麻黄",
+        "麻黄",
+        "发散风寒药",
+        &["发汗解表", "宣肺平喘"],
+        "辛、微苦，温",
+    );
+    e.group_id = Some("sec1".into());
+    let r = mneme_core::search(&s, &[e], &groups, "解表药", None, 10);
+    assert_eq!(r.hits.len(), 1);
+    assert_eq!(r.hits[0].via, mneme_core::SearchVia::Group);
+    // 命中片段给的是完整路径，用户才知道它为什么被搜到
+    assert_eq!(r.hits[0].group, "解表药 / 发散风寒药");
+    assert_eq!(r.hits[0].snippet, "解表药 / 发散风寒药");
+}

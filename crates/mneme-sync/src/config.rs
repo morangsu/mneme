@@ -2,13 +2,33 @@ use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// 凭据不写死在配置里：写 `${ENV:VAR}`，运行时从环境变量取。
+/// 凭据不写死在配置里，两种引用方式：
+/// - `${ENV:VAR}`：从环境变量取（桌面端 / CI）。
+/// - `${SECRET:name}`：从宿主注入的**进程内注册表**取（Android 走 Keystore 解密后注入）。
+///
+/// 磁盘上的 `sync.json` 只保存引用，不保存真值。
 pub fn resolve_secret(s: &str) -> Result<String> {
     if let Some(var) = s.strip_prefix("${ENV:").and_then(|x| x.strip_suffix('}')) {
-        std::env::var(var).map_err(|_| Error::Config(format!("环境变量 {var} 未设置")))
-    } else {
-        Ok(s.to_string())
+        return std::env::var(var)
+            .map_err(|_| Error::Config(format!("环境变量 {var} 未设置")));
     }
+    if let Some(name) = s.strip_prefix("${SECRET:").and_then(|x| x.strip_suffix('}')) {
+        return crate::secret::get(name).ok_or_else(|| {
+            Error::Config(format!(
+                "凭据 {name} 未注入：宿主需要在启动时 setCredential(\"{name}\", …)"
+            ))
+        });
+    }
+    Ok(s.to_string())
+}
+
+/// Debug 里显示凭据占位：真值一律 `***`，只区分「有」和「没有」。
+///
+/// 这不是洁癖：`{:?}` 会出现在 panic message、调试日志、错误链里，
+/// 而一个 token 泄露就够别人读写整个私有库。占位符 `${SECRET:x}` 也一起打码 ——
+/// 少一个「这个字段到底是不是引用」的判断，就少一类漏判。
+fn mask(s: &str) -> &'static str {
+    if s.is_empty() { "<empty>" } else { "***" }
 }
 
 fn default_branch() -> String {
@@ -27,7 +47,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TargetConfig {
     /// 本地目录。指向 Syncthing / 坚果云 / OneDrive 的挂载目录即可复用它们做传输。
@@ -73,6 +93,80 @@ pub enum TargetConfig {
         #[serde(default)]
         prefix: String,
     },
+}
+
+impl std::fmt::Debug for TargetConfig {
+    /// 手写实现而非 derive：`token`/`password`/`secret_key` 必须打码，
+    /// 否则任何 `{:?}`（panic、日志、错误回执）都可能把凭据带出去。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local { id, dir } => f
+                .debug_struct("Local")
+                .field("id", id)
+                .field("dir", dir)
+                .finish(),
+            Self::WebDav {
+                id,
+                url,
+                username,
+                password,
+                root,
+            } => f
+                .debug_struct("WebDav")
+                .field("id", id)
+                .field("url", url)
+                .field("username", username)
+                .field("password", &mask(password))
+                .field("root", root)
+                .finish(),
+            Self::GitHub {
+                id,
+                token,
+                owner,
+                repo,
+                branch,
+                path,
+            } => f
+                .debug_struct("GitHub")
+                .field("id", id)
+                .field("token", &mask(token))
+                .field("owner", owner)
+                .field("repo", repo)
+                .field("branch", branch)
+                .field("path", path)
+                .finish(),
+            Self::Git {
+                id,
+                repo_dir,
+                remote,
+                branch,
+            } => f
+                .debug_struct("Git")
+                .field("id", id)
+                .field("repo_dir", repo_dir)
+                .field("remote", remote)
+                .field("branch", branch)
+                .finish(),
+            Self::S3 {
+                id,
+                endpoint,
+                bucket,
+                region,
+                access_key,
+                secret_key,
+                prefix,
+            } => f
+                .debug_struct("S3")
+                .field("id", id)
+                .field("endpoint", endpoint)
+                .field("bucket", bucket)
+                .field("region", region)
+                .field("access_key", &mask(access_key))
+                .field("secret_key", &mask(secret_key))
+                .field("prefix", prefix)
+                .finish(),
+        }
+    }
 }
 
 impl TargetConfig {
@@ -180,5 +274,62 @@ impl SyncConfig {
             upload_snapshots: true,
             keep_snapshots: 30,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gh(token: &str) -> SyncConfig {
+        SyncConfig {
+            device_id: "dev".into(),
+            targets: vec![TargetConfig::GitHub {
+                id: "github-private".into(),
+                token: token.into(),
+                owner: "o".into(),
+                repo: "r".into(),
+                branch: "main".into(),
+                path: "data".into(),
+            }],
+            exclude: vec![],
+            max_retries: 3,
+            upload_snapshots: true,
+            keep_snapshots: 30,
+        }
+    }
+
+    #[test]
+    fn debug_output_never_contains_the_secret() {
+        // 这条断言的意义：任何 `{:?}` 都不会把 token 带进日志 / panic / 错误回执
+        let cfg = gh("ghp_LEAKME1234567890");
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains("ghp_LEAKME"), "Debug 泄露了 token: {dbg}");
+        assert!(dbg.contains("github-private"));
+        // 空凭据也要有区分度，否则排查「为什么 401」时看不出配没配
+        assert!(format!("{:?}", gh("")).contains("<empty>"));
+    }
+
+    #[test]
+    fn secret_reference_resolves_from_registry() {
+        let _g = crate::secret::serialize_tests();
+        crate::secret::clear();
+        assert!(crate::secret::put("github-private", "ghp_from_vault"));
+        assert_eq!(
+            resolve_secret("${SECRET:github-private}").unwrap(),
+            "ghp_from_vault"
+        );
+        // 没注入时必须报错，而不是拿占位符当 token 去请求（那样会 401，误导排查）
+        let e = resolve_secret("${SECRET:missing}").unwrap_err();
+        assert!(e.to_string().contains("未注入"));
+        crate::secret::clear();
+    }
+
+    #[test]
+    fn plain_secrets_and_missing_env_are_handled() {
+        // 明文仍旧允许（桌面端单机、或用户确实想写在配置里）
+        assert_eq!(resolve_secret("plain-token").unwrap(), "plain-token");
+        // 环境变量缺失要报错，不能静默当成空 token 去请求
+        assert!(resolve_secret("${ENV:MNEME_TEST_VAR_NOPE}").is_err());
     }
 }

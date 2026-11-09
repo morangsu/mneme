@@ -46,6 +46,11 @@ import io.github.morangsu.mneme.ffi.upstreamResolve as ffiUpstreamResolve
 import io.github.morangsu.mneme.ffi.upstreamStatus as ffiUpstreamStatus
 import io.github.morangsu.mneme.ffi.view as ffiView
 import io.github.morangsu.mneme.ffi.views as ffiViews
+import io.github.morangsu.mneme.ffi.search as ffiSearch
+import io.github.morangsu.mneme.ffi.setCredential as ffiSetCredential
+import io.github.morangsu.mneme.ffi.clearCredential as ffiClearCredential
+import io.github.morangsu.mneme.ffi.credentials as ffiCredentials
+import io.github.morangsu.mneme.ffi.reloadSync as ffiReloadSync
 
 /**
  * Rust 内核的 Kotlin 门面。所有方法返回 JSON 字符串，错误也用 {"error": "..."} 表达。
@@ -144,4 +149,18 @@ object MnemeApi {
     fun reviewConfig(): String = ffiReviewConfig()
 
     fun setReviewConfig(configJson: String): String = ffiSetReviewConfig(configJson)
+
+    /** 全文检索：跨字段 + 同义名 + 拼音首字母（mh → 麻黄）；limit 传 0 按 50 条截断。 */
+    fun search(query: String, limit: UInt): String = ffiSearch(query, limit)
+
+    /** 注入凭据到进程内存（不落盘）；宿主负责用 Keystore 持久化。 */
+    fun setCredential(name: String, secret: String): String = ffiSetCredential(name, secret)
+
+    fun clearCredential(name: String): String = ffiClearCredential(name)
+
+    /** 已注入的凭据名（不含值）。 */
+    fun credentials(): String = ffiCredentials()
+
+    /** 凭据注入后重建同步引擎（不写盘）。 */
+    fun reloadSync(): String = ffiReloadSync()
 }

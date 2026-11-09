@@ -137,6 +137,13 @@ object MnemeApiStub {
                 .toString()
         }
 
+        "search" -> SAMPLE_SEARCH
+
+        "setCredential" -> JSONObject().put("ok", true).put("name", args["name"] ?: "").toString()
+        "clearCredential" -> JSONObject().put("ok", true).put("removed", true).toString()
+        "credentials" -> "{\"items\":[],\"count\":0}"
+        "reloadSync" -> "{\"ok\":true,\"configured\":false}"
+
         "exportData" -> JSONObject()
             .put("ok", true)
             .put("format", args["format"] ?: "bundle")
@@ -206,6 +213,14 @@ object MnemeApiStub {
 {"key":"nature","label":"性味归经","kind":"text","immutable":true,"required":false,"value":"辛、微苦，温。归肺、膀胱经"},
 {"key":"dosage","label":"用量","kind":"text","immutable":true,"required":false,"value":"2–10g"}
 ]}"""
+
+    /** 检索样例：主键命中、字段命中（带片段）、拼音首字母命中。 */
+    private const val SAMPLE_SEARCH =
+        """{"hits":[
+{"id":"herb-mahuang","name":"麻黄","kind":"herb","group":"发散风寒药","score":1000.0,"via":"name","field":"","label":"药名","snippet":"麻黄"},
+{"id":"herb-guizhi","name":"桂枝","kind":"herb","group":"发散风寒药","score":198.0,"via":"field","field":"effects","label":"功效","snippet":"发汗解肌、温通经脉"},
+{"id":"herb-kuxingren","name":"苦杏仁","kind":"herb","group":"止咳平喘药","score":400.0,"via":"pinyin","field":"","label":"药名","snippet":"苦杏仁"}
+],"total":3,"mode":"and","terms":["mh"]}"""
 
     /** PullPlan 样例：4 条冲突，覆盖 personalized / immutable / 普通 / 上游移除 四类。 */
     private const val SAMPLE_PULL_PLAN =
@@ -310,6 +325,13 @@ object MnemeBridge {
                     args["excludeId"] as String,
                 )
                 "configureSync" -> MnemeApi.configureSync(args["configJson"] as String)
+                "search" -> MnemeApi.search(args["query"] as String, args["limit"] as UInt)
+                "setCredential" -> MnemeApi.setCredential(
+                    args["name"] as String, args["secret"] as String
+                )
+                "clearCredential" -> MnemeApi.clearCredential(args["name"] as String)
+                "credentials" -> MnemeApi.credentials()
+                "reloadSync" -> MnemeApi.reloadSync()
                 "importData" -> MnemeApi.importData(
                     args["content"] as String,
                     args["filename"] as String,
@@ -404,6 +426,22 @@ object Api {
     /** 写入 sync.json 并重建同步引擎；configJson 为 SyncConfig 的 JSON。 */
     suspend fun configureSync(configJson: String): JSONObject =
         call("configureSync", mapOf("configJson" to configJson))
+
+    /** 全文检索。limit 传 0 由 Rust 侧按 50 截断。 */
+    suspend fun search(query: String, limit: Int = 50): JSONObject =
+        call("search", mapOf("query" to query, "limit" to limit.toUInt()))
+
+    /** 注入凭据到进程内存；真正落盘由 Vault（Android Keystore）负责。 */
+    suspend fun setCredential(name: String, secret: String): JSONObject =
+        call("setCredential", mapOf("name" to name, "secret" to secret))
+
+    suspend fun clearCredential(name: String): JSONObject =
+        call("clearCredential", mapOf("name" to name))
+
+    suspend fun credentials(): JSONObject = call("credentials")
+
+    /** 凭据注入后重建同步引擎（不写盘）。 */
+    suspend fun reloadSync(): JSONObject = call("reloadSync")
 
     suspend fun entityDetail(entityId: String): JSONObject =
         call("entityDetail", mapOf("entityId" to entityId))

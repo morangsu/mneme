@@ -353,8 +353,7 @@ pub fn view(id: String) -> String {
 }
 
 #[uniffi::export]
-pub fn reverse(clues_json: String) -> String {
-    call(|a| {
+pub fn reverse(clues_json: String) -> String {    call(|a| {
         let clues: Vec<String> = match serde_json::from_str(&clues_json) {
             Ok(v) => v,
             Err(e) => return err(format!("cluesJson 解析失败: {e}")),
@@ -382,6 +381,32 @@ pub fn reverse(clues_json: String) -> String {
             })
             .collect();
         json!({ "clues": parsed, "items": items })
+    })
+}
+
+// ---------------------------------------------------------------- 全文检索
+
+/// 跨字段检索：子串 + 同义名 + 拼音首字母（`mh` → 麻黄）。
+///
+/// 多词默认 AND（`麻黄 解表` 要求两个词都命中，可在不同字段）；AND 一条都没有时
+/// 才退化成 OR，返回的 `mode` 字段会告诉 UI 当前是哪种，避免用户以为搜错了。
+///
+/// `limit = 0` 时按 50 条截断（手机上一屏也放不下更多）；`total` 始终是截断前的总数。
+#[uniffi::export]
+pub fn search(query: String, limit: u32) -> String {
+    call(|a| {
+        let Some(schema) = schema_of(a) else {
+            return err("还没有加载领域 schema");
+        };
+        let (entities, groups) = a.store.read(|m| {
+            (
+                m.entities_vec(),
+                m.groups.values().cloned().collect::<Vec<_>>(),
+            )
+        });
+        let limit = if limit == 0 { 50 } else { limit as usize };
+        let out = mneme_core::search(&schema, &entities, &groups, &query, None, limit);
+        json!(out)
     })
 }
 
@@ -1533,6 +1558,21 @@ pub fn undo_edit(entity_id: String) -> String {
     })
 }
 
+/// 按磁盘上的 `sync.json` 重建同步引擎；返回是否真的重建了（false = 还没配同步）。
+///
+/// 必须重建而不是复用：`SyncEngine` 的后端是按目标懒构建后**缓存**的，
+/// 缓存项里含着已解析的 token。改了凭据却沿用旧引擎，就会表现成「token 换了还 401」。
+fn rebuild_engine(a: &mut App) -> mneme_sync::Result<bool> {
+    let path = a.root.join("sync.json");
+    if !path.exists() {
+        a.engine = None;
+        return Ok(false);
+    }
+    let cfg = SyncConfig::from_file(&path)?;
+    a.engine = Some(Arc::new(SyncEngine::new(a.store.clone(), cfg)));
+    Ok(true)
+}
+
 /// 写入 `sync.json` 并立即重建同步引擎，不需要重启 APP。
 ///
 /// `config_json` 就是 `SyncConfig` 的 JSON（含 `targets` 数组）；凭据允许直接写明文，
@@ -1554,6 +1594,76 @@ pub fn configure_sync(config_json: String) -> String {
         let device = cfg.device_id.clone();
         a.engine = Some(Arc::new(SyncEngine::new(a.store.clone(), cfg)));
         json!({ "ok": true, "device": device, "targets": ids })
+    })
+}
+
+// ---------------------------------------------------------------- 凭据
+
+/// 注入一条凭据到**进程内存**。宿主负责持久化与加密（Android 走 Keystore）。
+///
+/// 为什么要多这一跳：`sync.json` 里只写 `${SECRET:github-private}`，真值不落盘。
+/// APP 启动时从系统密钥库解密 → 调本方法注入 → 再 `reloadSync()` 重建引擎。
+/// 进程退出即失效，重启后必须重新注入。
+///
+/// 返回值只含名字，**绝不回显凭据本身**。
+#[uniffi::export]
+pub fn set_credential(name: String, secret: String) -> String {
+    if !mneme_sync::secret::valid_name(&name) {
+        return json!({ "error": format!("凭据名不合法：{name}（只允许字母数字与 - _ . ，1~64 字符）") })
+            .to_string();
+    }
+    if secret.trim().is_empty() {
+        // 空值比「没配」更危险：会把占位符解析成空 token，然后 401 让人以为配置错了
+        return json!({ "error": "凭据不能为空；要删除请用 clearCredential" }).to_string();
+    }
+    mneme_sync::secret::put(&name, &secret);
+    call(|a| {
+        // 后端是按目标懒构建并缓存的：缓存里可能还握着**旧 token**，
+        // 换了凭据就必须重建引擎，否则「改了 token 却还是 401」。
+        let rebuilt = match rebuild_engine(a) {
+            Ok(v) => v,
+            Err(e) => {
+                return json!({ "ok": true, "name": name, "rebuilt": false, "warning": e.to_string() });
+            }
+        };
+        json!({ "ok": true, "name": name, "rebuilt": rebuilt })
+    })
+}
+
+/// 移除一条内存凭据。之后任何引用它的目标都会明确报「未注入」，而不是拿空 token 去请求。
+#[uniffi::export]
+pub fn clear_credential(name: String) -> String {
+    let removed = mneme_sync::secret::remove(&name);
+    call(|a| {
+        // 同上：不清缓存的话「清除凭据」之后后台同步照样能跑（后端里还留着旧 token）
+        let rebuilt = rebuild_engine(a).unwrap_or(false);
+        json!({ "ok": true, "name": name, "removed": removed, "rebuilt": rebuilt })
+    })
+}
+
+/// 已注入的凭据名（不含值）。UI 用来显示「已保存 / 未保存」。
+#[uniffi::export]
+pub fn credentials() -> String {
+    let items = mneme_sync::secret::names();
+    json!({ "items": items, "count": items.len() }).to_string()
+}
+
+/// 重读 `sync.json` 并重建同步引擎（凭据注入之后调用）。
+///
+/// 与 `configureSync` 的区别：不写盘、不改配置，只让新的凭据生效。
+#[uniffi::export]
+pub fn reload_sync() -> String {
+    call(|a| match rebuild_engine(a) {
+        Ok(false) => json!({ "ok": true, "configured": false }),
+        Ok(true) => {
+            let (device, ids) = a
+                .engine
+                .as_ref()
+                .map(|e| (e.config().device_id.clone(), e.target_ids()))
+                .unwrap_or_default();
+            json!({ "ok": true, "configured": true, "device": device, "targets": ids })
+        }
+        Err(e) => err(e),
     })
 }
 

@@ -21,7 +21,9 @@ pub mod error;
 pub mod index;
 pub mod merge;
 pub mod paste;
+pub mod pinyin;
 pub mod schema;
+pub mod search;
 pub mod srs;
 pub mod text;
 
@@ -35,7 +37,9 @@ pub use paste::{
     Duplicate, PasteBatch, PasteHit, PasteParse, find_duplicates, parse_paste,
     parse_paste_batch,
 };
+pub use pinyin::initials;
 pub use schema::{DirectionDef, DomainSchema, EntityDef, FieldDef, FieldKind, FilterOp, TermAliasDef, ViewDef, ViewFilter};
+pub use search::{Hit as SearchHit, Outcome as SearchOutcome, Via as SearchVia, search};
 pub use srs::{
     DailyQueue, FSRS5_DEFAULT_W, FsrsScheduler, ReviewConfig, Scheduler, Sm2Scheduler, SrsState,
     WeakCard, daily_queue, due_cards, fold_events, mastery_label, mastery_label_ext,

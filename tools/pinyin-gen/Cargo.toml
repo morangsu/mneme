@@ -1,0 +1,11 @@
+[package]
+name = "pinyin-gen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 独立 crate：不进主 workspace，只在需要重生成首字母表时手动跑。
+[workspace]
+
+[dependencies]
+pinyin = "0.10"

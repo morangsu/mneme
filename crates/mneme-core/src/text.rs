@@ -30,34 +30,49 @@ pub fn remove_redundant(s: &str) -> String {
 /// 中文归一化：全角转半角、大写转小写、只保留字母数字与 CJK。
 /// 覆盖 0x3400-0x9FFF（含扩展 A，中药生僻字如「䗪」）与扩展 B 之后。
 pub fn normalize(s: &str) -> String {
+    normalize_mapped(s).0
+}
+
+/// 归一化 + 原文位置映射。
+///
+/// 返回 `(归一化串, 每个归一化字符对应的原文 char 下标)`。
+/// 搜索要给出「命中片段」，但归一化会丢掉标点，位置就对不上了；
+/// 有了映射才能从归一化串里的命中位置反推回原文，截一段带标点的上下文。
+pub fn normalize_mapped(s: &str) -> (String, Vec<usize>) {
     let cleaned = remove_redundant(s);
     let mut out = String::with_capacity(cleaned.len());
-    for ch in cleaned.chars() {
-        let cp = ch as u32;
-        let c = if (0xFF21..=0xFF3A).contains(&cp)
-            || (0xFF41..=0xFF5A).contains(&cp)
-            || (0xFF10..=0xFF19).contains(&cp)
-        {
-            char::from_u32(cp - 0xFEE0).unwrap_or(ch)
-        } else if cp == 0xFF05 {
-            '%'
-        } else {
-            ch
-        };
-        let c = c.to_ascii_lowercase();
-        let u = c as u32;
-        // 只保留汉字与部首。刻意跳过 0x3000-0x33FF（CJK 标点 / 假名），
-        // 否则「发汗解表、宣肺平喘」里的顿号会进索引，导致同一术语两种键。
-        let cjk = (0x2E80..=0x2FDF).contains(&u)
-            || (0x3400..=0x9FFF).contains(&u)
-            || (0xF900..=0xFAFF).contains(&u)
-            || (0x20000..=0x323AF).contains(&u);
-        let keep = c.is_ascii_alphanumeric() || cjk;
-        if keep {
+    let mut map = Vec::with_capacity(cleaned.len());
+    for (idx, ch) in cleaned.chars().enumerate() {
+        if let Some(c) = keep_char(ch) {
             out.push(c);
+            map.push(idx);
         }
     }
-    out
+    (out, map)
+}
+
+/// 单个字符的归一化规则：全角转半角、大写转小写、只保留字母数字与 CJK。
+fn keep_char(ch: char) -> Option<char> {
+    let cp = ch as u32;
+    let c = if (0xFF21..=0xFF3A).contains(&cp)
+        || (0xFF41..=0xFF5A).contains(&cp)
+        || (0xFF10..=0xFF19).contains(&cp)
+    {
+        char::from_u32(cp - 0xFEE0).unwrap_or(ch)
+    } else if cp == 0xFF05 {
+        '%'
+    } else {
+        ch
+    };
+    let c = c.to_ascii_lowercase();
+    let u = c as u32;
+    // 只保留汉字与部首。刻意跳过 0x3000-0x33FF（CJK 标点 / 假名），
+    // 否则「发汗解表、宣肺平喘」里的顿号会进索引，导致同一术语两种键。
+    let cjk = (0x2E80..=0x2FDF).contains(&u)
+        || (0x3400..=0x9FFF).contains(&u)
+        || (0xF900..=0xFAFF).contains(&u)
+        || (0x20000..=0x323AF).contains(&u);
+    if c.is_ascii_alphanumeric() || cjk { Some(c) } else { None }
 }
 
 /// Dice 双字组系数，与 tiku 的 compareTwoStrings 同算法。

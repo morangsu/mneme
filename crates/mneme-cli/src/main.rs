@@ -68,6 +68,13 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// 全文检索：跨字段 + 同义名 + 拼音首字母（mneme search mh）
+    Search {
+        /// 关键词，空格分隔表示「都要命中」（AND）
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// 打印反向卡（默认不显示答案）
     Quiz {
         #[arg(long, default_value_t = 5)]
@@ -385,6 +392,45 @@ async fn main() -> anyhow::Result<()> {
                         .collect();
                     println!("  {} [{}] {}", e.display_of(primary), e.group_id.as_deref().unwrap_or("-"), fields.join(" / "));
                 }
+            }
+        }
+
+        Cmd::Search { query, limit } => {
+            let store = open(&cli)?;
+            let (schema, entities, groups) = store.read(|m| {
+                (
+                    m.schema.clone(),
+                    m.entities_vec(),
+                    m.groups.values().cloned().collect::<Vec<_>>(),
+                )
+            });
+            let Some(schema) = schema else {
+                anyhow::bail!("还没有加载领域 schema，先执行 mneme init");
+            };
+            let out = mneme_core::search(&schema, &entities, &groups, query, None, *limit);
+            println!(
+                "命中 {} 条（{} 条已显示，模式 {}，词 {:?}）:",
+                out.total,
+                out.hits.len(),
+                out.mode,
+                out.terms
+            );
+            for h in &out.hits {
+                let via = match h.via {
+                    mneme_core::SearchVia::Name => "药名",
+                    mneme_core::SearchVia::Synonym => "别名",
+                    mneme_core::SearchVia::Pinyin => "拼音",
+                    mneme_core::SearchVia::Field => "字段",
+                    mneme_core::SearchVia::Group => "药群",
+                };
+                if h.snippet.is_empty() || h.snippet == h.name {
+                    println!("  {} [{via}] {}", h.name, h.group);
+                } else {
+                    println!("  {} [{via}·{}] {}", h.name, h.label, h.snippet);
+                }
+            }
+            if out.mode == "or" {
+                println!("（没有一条同时满足所有词，已改为命中任意一个词）");
             }
         }
 
