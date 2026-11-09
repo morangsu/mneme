@@ -40,6 +40,11 @@ impl InvertedIndex {
         self.ids.get(idx as usize).map(String::as_str)
     }
 
+    /// 诊断用：`(字段数, 词条数)`，即倒排表的规模。基准与内存估算都用到。
+    pub fn shape(&self) -> (usize, usize) {
+        (self.postings.len(), self.postings.values().map(|m| m.len()).sum())
+    }
+
     pub fn lookup(&self, field: &str, term: &str) -> &[u32] {
         self.postings
             .get(field)

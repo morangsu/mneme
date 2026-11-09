@@ -36,6 +36,29 @@ use std::{
     sync::Arc,
 };
 
+/// 冷启动分解计时。
+///
+/// 为什么要暴露：桌面上「开窗到出数据」的预算只有几百毫秒，
+/// 而 `open()` 里混着四件性质完全不同的事（读快照 / 重放日志 / 派生索引 / 刷镜像），
+/// 不拆开就只能看到总数、猜不出该优化谁。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpenTimings {
+    /// 读最新快照并校验
+    pub snapshot_load: std::time::Duration,
+    /// 重放各设备事件分片到内存
+    pub replay: std::time::Duration,
+    /// 派生倒排索引与卡片（`refresh`）
+    pub derive: std::time::Duration,
+    /// 全量重刷 SQLite 物化镜像
+    pub sqlite_rebuild: std::time::Duration,
+}
+
+impl OpenTimings {
+    pub fn total(&self) -> std::time::Duration {
+        self.snapshot_load + self.replay + self.derive + self.sqlite_rebuild
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stats {
     pub entities: usize,
@@ -59,6 +82,17 @@ pub struct Store {
 impl Store {
     /// 加载顺序：最新快照作基线 -> 重放所有设备分片日志 -> 派生索引与卡片。
     pub fn open(root: impl AsRef<Path>, device: &str) -> Result<Arc<Self>> {
+        Ok(Self::open_timed(root, device)?.0)
+    }
+
+    /// 同 `open`，额外返回各阶段耗时（桌面端启动预算用）。
+    ///
+    /// 行为与 `open` 完全一致——计时用的是 `Instant`，不改变任何加载顺序。
+    pub fn open_timed(
+        root: impl AsRef<Path>,
+        device: &str,
+    ) -> Result<(Arc<Self>, OpenTimings)> {
+        let mut t = OpenTimings::default();
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root)?;
         let log = EventLog::open(&root, device)?;
@@ -66,11 +100,16 @@ impl Store {
 
         let mut mem = Memory::default();
         mem.device = sanitize(device);
+        let started = std::time::Instant::now();
         if let Some((_, snap)) = snaps.latest()? {
             snap.verify()?;
             mem.load_snapshot(&snap);
         }
+        t.snapshot_load = started.elapsed();
+
+        let started = std::time::Instant::now();
         log.replay(&mut mem)?;
+        t.replay = started.elapsed();
 
         #[cfg(feature = "sqlite")]
         let sqlite = Some(Arc::new(sqlite_mirror::SqliteMirror::open(
@@ -85,10 +124,17 @@ impl Store {
             #[cfg(feature = "sqlite")]
             sqlite,
         });
+        let started = std::time::Instant::now();
         store.refresh()?;
+        t.derive = started.elapsed();
+
         #[cfg(feature = "sqlite")]
-        store.rebuild_sqlite()?;
-        Ok(store)
+        {
+            let started = std::time::Instant::now();
+            store.rebuild_sqlite()?;
+            t.sqlite_rebuild = started.elapsed();
+        }
+        Ok((store, t))
     }
 
     pub fn root(&self) -> &Path {

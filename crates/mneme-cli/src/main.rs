@@ -98,6 +98,18 @@ enum Cmd {
         #[arg(long, default_value = "data/sync.json")]
         out: PathBuf,
     },
+    /// 冷启动预算：open 各阶段 + 首屏查询 + 单条编辑的真实耗时
+    BenchStartup {
+        /// 构造多少条实体
+        #[arg(long, default_value_t = 500)]
+        entities: usize,
+        /// 重复打开几次（取中位数与 p95）
+        #[arg(long, default_value_t = 7)]
+        rounds: usize,
+        /// 用哪个领域包做字段形状（决定字段数量与文本长度）
+        #[arg(long, default_value = "domains/materia-medica.toml")]
+        schema: PathBuf,
+    },
     /// 内存索引 / 反查 / 快照的同环境基准
     Bench {
         #[arg(long, default_value_t = 10000)]
@@ -526,6 +538,14 @@ async fn main() -> anyhow::Result<()> {
             let _ = fs::remove_dir_all(&root);
         }
 
+        Cmd::BenchStartup {
+            entities,
+            rounds,
+            schema,
+        } => {
+            bench_startup(*entities, *rounds, schema)?;
+        }
+
         Cmd::TopologyExample { out, owner } => {
             let t = Topology::example(owner);
             if let Some(parent) = out.parent() {
@@ -685,5 +705,268 @@ async fn main() -> anyhow::Result<()> {
             mneme_server::serve(state, *port, *lan).await?;
         }
     }
+    Ok(())
+}
+
+
+// ---------------------------------------------------------------- 冷启动基准
+
+fn median(xs: &mut [f64]) -> f64 {
+    if xs.is_empty() {
+        return 0.0;
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    xs[xs.len() / 2]
+}
+
+fn p95(xs: &[f64]) -> f64 {
+    if xs.is_empty() {
+        return 0.0;
+    }
+    let mut v = xs.to_vec();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    v[((v.len() as f64 * 0.95) as usize).min(v.len() - 1)]
+}
+
+/// 一段固定长度的中文填充文本，长度按字段类型给，模拟真实教材字段的体量。
+///
+/// 关键在**术语多样性**：真实 500 味药大约共享 600~900 个不同功效词，平均每个词
+/// 只出现在 2~6 味药上。如果只用十来个词循环，倒排 posting 会被放大几十倍，
+/// 卡片生成里「这条线索是否有歧义」的判定就会被人为拖慢——那是测出来的假瓶颈。
+const POOL: &[&str] = &[
+    "发汗解表", "宣肺平喘", "利水消肿", "温通经脉", "助阳化气", "清热泻火",
+    "除烦止渴", "凉血解毒", "润肠通便", "降气止咳", "疏散风热", "清利头目",
+];
+/// 词表规模：12 个词根 × 60 个编号 = 720 个不同术语
+const VARIANTS: usize = 60;
+
+fn term_at(i: usize) -> String {
+    format!("{}{}", POOL[i % POOL.len()], (i / POOL.len()) % VARIANTS)
+}
+
+fn filler(seed: usize, chars: usize) -> String {
+    let mut out = String::with_capacity(chars * 3);
+    let mut i = seed;
+    while out.chars().count() < chars {
+        out.push_str(&term_at(i));
+        i += 1;
+    }
+    out.chars().take(chars).collect()
+}
+
+/// 按 schema 的字段形状把一条实体填满——只填 schema 里真实存在的字段，
+/// 这样换领域包（内经/植物学）也能用同一条命令量。
+fn fill_entity(schema: &DomainSchema, idx: usize) -> Entity {
+    let kind = schema.entities.first().map(|e| e.kind.as_str()).unwrap_or("item");
+    let primary = schema
+        .entity_def(kind)
+        .and_then(|d| d.primary.as_deref())
+        .unwrap_or("name");
+    let mut e = Entity::new(format!("药{idx}"), kind, "bench", 1);
+    for f in schema.entity_def(kind).map(|d| d.fields.as_slice()).unwrap_or(&[]) {
+        if f.key == primary {
+            e.set(primary, Value::Text(format!("药{idx}")), 1);
+            continue;
+        }
+        match f.kind {
+            mneme_core::FieldKind::Tags => {
+                let n = 3 + idx % 3;
+                e.set(
+                    f.key.clone(),
+                    Value::Tags((0..n).map(|k| filler(idx + k, 4)).collect()),
+                    1,
+                );
+            }
+            mneme_core::FieldKind::Tag => {
+                e.set(f.key.clone(), Value::Text(filler(idx, 4)), 1);
+            }
+            mneme_core::FieldKind::Number => {
+                e.set(f.key.clone(), Value::Number((idx % 30) as f64), 1);
+            }
+            mneme_core::FieldKind::Bool => {
+                e.set(f.key.clone(), Value::Bool(idx % 2 == 0), 1);
+            }
+            mneme_core::FieldKind::Text => {
+                // 长文本字段（应用/笔记/鉴别）按 80 字，其余 20 字
+                let long = matches!(f.key.as_str(), "indications" | "notes" | "identification" | "applications");
+                e.set(f.key.clone(), Value::Text(filler(idx, if long { 80 } else { 20 })), 1);
+            }
+        }
+    }
+    e
+}
+
+fn dir_size(p: &std::path::Path) -> u64 {
+    let mut total = 0;
+    if let Ok(rd) = fs::read_dir(p) {
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                total += dir_size(&path);
+            } else if let Ok(m) = entry.metadata() {
+                total += m.len();
+            }
+        }
+    }
+    total
+}
+
+fn bench_startup(n: usize, rounds: usize, schema_path: &std::path::Path) -> anyhow::Result<()> {
+    let toml = fs::read_to_string(schema_path).map_err(|e| {
+        anyhow::anyhow!(
+            "读不到领域包 {}：{e}\n（这是本地克隆的公共数据仓库，git clone 到 domains/ 即可）",
+            schema_path.display()
+        )
+    })?;
+    let schema = DomainSchema::from_toml(&toml)?;
+    let field_count = schema
+        .entities
+        .first()
+        .map(|e| e.fields.len())
+        .unwrap_or(0);
+
+    let root = std::env::temp_dir().join(format!("mneme-startup-{}-{}", n, now_ms()));
+    // 造库：一次批量写（等价于导入一份完整数据），让事件日志与镜像都达到目标规模
+    {
+        let store = Store::open(&root, "bench")?;
+        let mut ops = vec![Op::SetSchema { toml: toml.clone() }];
+        for i in 0..n {
+            ops.push(Op::UpsertEntity {
+                entity: fill_entity(&schema, i),
+            });
+        }
+        store.mutate(&ops)?;
+    }
+
+    let mut walls: Vec<f64> = Vec::with_capacity(rounds);
+    let mut snaps: Vec<f64> = Vec::with_capacity(rounds);
+    let mut replays: Vec<f64> = Vec::with_capacity(rounds);
+    let mut derives: Vec<f64> = Vec::with_capacity(rounds);
+    let mut sqlites: Vec<f64> = Vec::with_capacity(rounds);
+
+    let mut last: Option<std::sync::Arc<Store>> = None;
+    for _ in 0..rounds {
+        let t = Instant::now();
+        let (store, timing) = Store::open_timed(&root, "bench")?;
+        walls.push(t.elapsed().as_secs_f64() * 1000.0);
+        snaps.push(timing.snapshot_load.as_secs_f64() * 1000.0);
+        replays.push(timing.replay.as_secs_f64() * 1000.0);
+        derives.push(timing.derive.as_secs_f64() * 1000.0);
+        sqlites.push(timing.sqlite_rebuild.as_secs_f64() * 1000.0);
+        last = Some(store);
+    }
+    let store = last.expect("at least one round");
+
+    // 首屏数据：矩阵要的是整表投影（FFI view() 的等价物）
+    let t = Instant::now();
+    let list = store.read(|m| m.entities_vec());
+    let first_paint = t.elapsed();
+
+    // 检索：一次典型查询（药名首字母 + 字段子串）
+    let t = Instant::now();
+    let rounds_q = 50;
+    let mut hits = 0usize;
+    for i in 0..rounds_q {
+        let q = if i % 2 == 0 { "mh".to_string() } else { filler(i, 4) };
+        let out = mneme_core::search(&schema, &list, &[], &q, None, 50);
+        hits += out.hits.len();
+    }
+    let search_each = t.elapsed().as_secs_f64() * 1000.0 / rounds_q as f64;
+
+    // 派生拆解：索引单独、索引+卡片
+    let t = Instant::now();
+    let mut idx = InvertedIndex::default();
+    idx.rebuild(&list, &schema);
+    let index_only = t.elapsed();
+    let t = Instant::now();
+    let (idx2, cards) = store.read(|m| m.derive());
+    let derive_all = t.elapsed();
+    let card_count = cards.len();
+    let (idx_fields, idx_terms) = idx2.shape();
+    drop((idx, cards));
+
+    // 归因：单次 reverse 与单条实体卡片生成，各自多快
+    let groups_map = store.read(|m| m.groups_map());
+    let sample_entity = list.first().cloned().expect("entity");
+    let clue: Vec<(String, String)> = {
+        let def = schema.entity_def(&sample_entity.kind).expect("def");
+        let d = def.directions.first().expect("direction");
+        let f = d.clue_fields.first().expect("clue field");
+        let t = sample_entity
+            .get(f)
+            .and_then(|v| v.terms().first().map(|x| x.to_string()))
+            .unwrap_or_default();
+        vec![(format!("{}.{}", sample_entity.kind, f), t)]
+    };
+    let t = Instant::now();
+    for _ in 0..200 {
+        let _ = idx2.reverse(&clue);
+    }
+    let reverse_each = t.elapsed().as_secs_f64() * 1e6 / 200.0;
+    let t = Instant::now();
+    let mut sample_cards = 0;
+    let mut sample_candidates = 0;
+    for _ in 0..20 {
+        if let Ok(cs) = mneme_core::generate_cards(&schema, &sample_entity, &groups_map, &idx2) {
+            sample_cards = cs.len();
+            sample_candidates = cs.iter().map(|c| c.candidates.len()).sum();
+        }
+    }
+    let cards_each = t.elapsed().as_secs_f64() * 1e6 / 20.0;
+
+    // 单条编辑：连做 3 次，第 2/3 次才是稳态（第 1 次会带上 SQLite 首次事务与 WAL 增长）
+    let mut edits: Vec<f64> = Vec::new();
+    for round in 0..3 {
+        let t = Instant::now();
+        let mut edit = store.read(|m| m.entities.get("药0").cloned()).expect("entity");
+        edit.set("notes", Value::Text(filler(7 + round, 80)), now_ms());
+        edit.rev += 1;
+        store.mutate(&[Op::UpsertEntity { entity: edit }])?;
+        edits.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    let one_edit = edits[1];
+
+    let events_bytes = dir_size(&root.join("events"));
+    let sqlite_bytes = dir_size(&root);
+
+    let mut w = walls.clone();
+    let mut r = replays.clone();
+    let mut d = derives.clone();
+    let mut sq = sqlites.clone();
+    println!("mneme bench-startup（n={n} 实体 × {field_count} 字段，rounds={rounds}，领域包 {}）", schema_path.display());
+    let db = fs::metadata(root.join("index.sqlite")).map(|m| m.len()).unwrap_or(0);
+    let wal = fs::metadata(root.join("index.sqlite-wal")).map(|m| m.len()).unwrap_or(0);
+    let snaps_bytes = dir_size(&root.join("snapshots"));
+    println!(
+        "  磁盘           事件 {:.1} MB / sqlite {:.1} MB / wal {:.1} MB / 快照 {:.1} MB / 合计 {:.1} MB",
+        events_bytes as f64 / 1048576.0,
+        db as f64 / 1048576.0,
+        wal as f64 / 1048576.0,
+        snaps_bytes as f64 / 1048576.0,
+        sqlite_bytes as f64 / 1048576.0
+    );
+    println!(
+        "  冷启动 wall     中位 {:>7.1} ms   p95 {:>7.1} ms   （{} 次，含进程内新建 Store）",
+        median(&mut w), p95(&walls), rounds
+    );
+    println!("    快照读取      {:>7.2} ms", median(&mut snaps.clone()));
+    println!("    重放日志      {:>7.2} ms", median(&mut r));
+    println!("    派生索引+卡   {:>7.2} ms", median(&mut d));
+    println!("    刷 SQLite     {:>7.2} ms   ← 每次 open 都全量重刷", median(&mut sq));
+    println!("  首屏整表投影    {:>7.2} ms（{} 行）", first_paint.as_secs_f64() * 1000.0, list.len());
+    println!("  派生拆解        索引 {:>6.1} ms / 索引+卡片 {:>6.1} ms / {} 张卡 / 倒排 {} 字段 {} 词条",
+        index_only.as_secs_f64() * 1000.0,
+        derive_all.as_secs_f64() * 1000.0,
+        card_count, idx_fields, idx_terms);
+    println!("  单次 reverse    {:>7.2} µs（1 条线索）", reverse_each);
+    println!(
+        "  单条卡片生成    {:>7.1} µs（{sample_cards} 张，歧义候选合计 {sample_candidates} 个）",
+        cards_each
+    );
+    println!("  检索            {:>7.3} ms/次（50 次共命中 {hits} 条）", search_each);
+    println!("  单条编辑        首次 {:>6.1} ms / 稳态 {:>6.1} ms / 第三次 {:>6.1} ms", edits[0], one_edit, edits[2]);
+
+    drop(store);
+    let _ = fs::remove_dir_all(&root);
     Ok(())
 }
