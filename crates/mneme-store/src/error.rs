@@ -14,6 +14,10 @@ pub enum Error {
     Snapshot(String),
     #[error("设备名非法: {0}")]
     Device(String),
+    /// 业务规则拒绝（撤销跨设备、重复主键、对新建条目撤销…）。
+    /// 单独一类是为了让上层能原样把中文原因显示给用户，不再包一层"core:"前缀。
+    #[error("{0}")]
+    Invalid(String),
 
     #[cfg(feature = "sqlite")]
     #[error("SQLite: {0}")]

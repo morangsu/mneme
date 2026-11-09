@@ -54,10 +54,17 @@ fun MatrixScreen() {
     var loaded by remember { mutableStateOf(false) }
     // 正在编辑的实体 id；非 null 时弹出编辑面板
     var editing by remember { mutableStateOf<String?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    var recycle by remember { mutableStateOf(false) }
+    // 实体类型由 Rust 侧 state 返回，避免在这里硬编码 "herb"
+    var kind by remember { mutableStateOf("herb") }
 
     LaunchedEffect(reload) {
         val s = Api.state()
-        if (s.err() != null) error = s.err() else stateObj = s
+        if (s.err() != null) error = s.err() else {
+            stateObj = s
+            if (s.optString("kind").isNotBlank()) kind = s.optString("kind")
+        }
         val v = Api.views()
         if (v.err() != null) {
             error = v.err()
@@ -104,6 +111,13 @@ fun MatrixScreen() {
                 )
                 if (s.optInt("entities") > 0) {
                     Text("点任意一行可编辑；「原样」字段不可改", color = MnemeColors.TextDim, fontSize = 11.sp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GhostButton("＋ 新建", onClick = { creating = true })
+                    GhostButton(
+                        "回收站 (${s.optInt("recycle")})",
+                        onClick = { recycle = true },
+                    )
                 }
             }
         }
@@ -178,6 +192,23 @@ fun MatrixScreen() {
             entityId = id,
             onDismiss = { editing = null },
             onSaved = { reload++ },
+        )
+    }
+    if (creating) {
+        CreateEntityDialog(
+            kind = kind,
+            prefill = null,
+            onDismiss = { creating = false },
+            onSaved = {
+                creating = false
+                reload++
+            },
+        )
+    }
+    if (recycle) {
+        RecycleBinDialog(
+            onDismiss = { recycle = false },
+            onChanged = { reload++ },
         )
     }
 }

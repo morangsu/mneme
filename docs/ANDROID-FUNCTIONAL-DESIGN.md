@@ -249,6 +249,8 @@ Idle → Fetch(public/private) → Push(events) → Commit → Done(receipt)
 | `parseFields` | `text` | `{fields, unmatched}` | 粘贴解析（Rust 侧做，桌面复用） |
 | `setCredential` | `name`, `value` | `{ok}` | 内存凭据，不落盘 |
 
+**实现状态**：`createEntity` / `deleteEntity` / `restoreEntity` / `listDeleted` / `entityHistory` / `undoEdit` / `entityTemplate`（新建表单定义）**已实现并有单测**（A1）；`quizQueue` / `suggestGrade` / `weakCards` / `search` / `parseFields` / `setCredential` 待 A2/A4。`state()` 新增 `kind` 与 `recycle` 两个字段。
+
 **兼容性**：只增不改。`view()` 已加 `_id`；`entityDetail` / `editEntity` 保持。
 
 ---

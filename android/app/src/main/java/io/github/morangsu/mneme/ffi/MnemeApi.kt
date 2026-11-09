@@ -6,6 +6,13 @@ package io.github.morangsu.mneme.ffi
 // 也避免业务代码依赖生成文件的内部命名。别名 import 防止与 object 方法同名递归。
 import io.github.morangsu.mneme.ffi.answer as ffiAnswer
 import io.github.morangsu.mneme.ffi.configureSync as ffiConfigureSync
+import io.github.morangsu.mneme.ffi.createEntity as ffiCreateEntity
+import io.github.morangsu.mneme.ffi.deleteEntity as ffiDeleteEntity
+import io.github.morangsu.mneme.ffi.entityHistory as ffiEntityHistory
+import io.github.morangsu.mneme.ffi.entityTemplate as ffiEntityTemplate
+import io.github.morangsu.mneme.ffi.listDeleted as ffiListDeleted
+import io.github.morangsu.mneme.ffi.restoreEntity as ffiRestoreEntity
+import io.github.morangsu.mneme.ffi.undoEdit as ffiUndoEdit
 import io.github.morangsu.mneme.ffi.editEntity as ffiEditEntity
 import io.github.morangsu.mneme.ffi.entityDetail as ffiEntityDetail
 import io.github.morangsu.mneme.ffi.exportData as ffiExportData
@@ -61,4 +68,17 @@ object MnemeApi {
     /** 批量改字段；immutable 字段会被 Rust 侧拒绝。 */
     fun editEntity(entityId: String, fieldsJson: String): String =
         ffiEditEntity(entityId, fieldsJson)
+
+    /** 新建空白表单的字段定义。 */
+    fun entityTemplate(kind: String): String = ffiEntityTemplate(kind)
+
+    /** 新建条目（immutable 字段允许填，这是"抄错了另建一条"的正路）。 */
+    fun createEntity(kind: String, fieldsJson: String, idHint: String): String =
+        ffiCreateEntity(kind, fieldsJson, idHint)
+
+    fun deleteEntity(entityId: String): String = ffiDeleteEntity(entityId)
+    fun restoreEntity(entityId: String): String = ffiRestoreEntity(entityId)
+    fun listDeleted(): String = ffiListDeleted()
+    fun entityHistory(entityId: String, limit: UInt): String = ffiEntityHistory(entityId, limit)
+    fun undoEdit(entityId: String): String = ffiUndoEdit(entityId)
 }

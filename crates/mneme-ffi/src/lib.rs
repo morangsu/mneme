@@ -196,10 +196,15 @@ pub fn open_database(path: String, device: String) -> String {
 pub fn state() -> String {
     call(|a| {
         let st = a.store.stats();
-        let (schema, aliases) = a.store.read(|m| {
+        let (schema, aliases, kind, recycle) = a.store.read(|m| {
             (
                 m.schema.as_ref().map(|x| x.name.clone()).unwrap_or_default(),
                 m.aliases.len(),
+                m.schema
+                    .as_ref()
+                    .and_then(|x| x.entities.first().map(|e| e.kind.clone()))
+                    .unwrap_or_default(),
+                m.entities.values().filter(|e| e.deleted).count(),
             )
         });
         let sqlite = a.store.sqlite().map(|s| {
@@ -215,6 +220,7 @@ pub fn state() -> String {
             "schema": schema, "entities": st.entities, "groups": st.groups,
             "cards": st.cards, "events": st.events, "rev": st.rev,
             "aliases": aliases, "device": st.device,
+            "kind": kind, "recycle": recycle,
             "upstream_rev": a.provenance.upstream_rev,
             "topology": a.topology.schema_id,
             "sqlite": sqlite,
@@ -630,6 +636,222 @@ pub fn edit_entity(entity_id: String, fields_json: String) -> String {
     })
 }
 
+// ---------------------------------------------------------------- 新建 / 删除 / 历史
+
+/// 空白表单的字段定义（新建用）。与 `entityDetail` 同构，只是值全空。
+#[uniffi::export]
+pub fn entity_template(kind: String) -> String {
+    call(|a| {
+        let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
+        let Some(def) = schema.entity_def(&kind) else {
+            return err(format!("未知实体类型：{kind}"));
+        };
+        let fields: Vec<Json> = def
+            .fields
+            .iter()
+            .map(|f| {
+                json!({
+                    "key": f.key,
+                    "label": if f.label.is_empty() { f.key.clone() } else { f.label.clone() },
+                    "kind": kind_name(f.kind),
+                    "immutable": f.immutable,
+                    "required": f.required,
+                    "value": "",
+                })
+            })
+            .collect();
+        json!({
+            "id": "",
+            "kind": kind,
+            "primary": def.primary.clone().unwrap_or_else(|| "name".into()),
+            "title": "新建",
+            "rev": 0,
+            "fields": fields,
+        })
+    })
+}
+
+/// 新建一条实体。`immutable` 字段**允许**在这里填写 —— 这正是「教材抄错一个字」的合法出路：
+/// 不改原条目，另建一条并标 `supersedes`。
+///
+/// 重名不自动覆盖，返回 `existing_id` 让 UI 决定「去编辑」还是「换个名字」。
+#[uniffi::export]
+pub fn create_entity(kind: String, fields_json: String, id_hint: String) -> String {
+    call(|a| {
+        let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
+        let Some(def) = schema.entity_def(&kind).cloned() else {
+            return err(format!("未知实体类型：{kind}"));
+        };
+        let raw: BTreeMap<String, Json> = match serde_json::from_str(&fields_json) {
+            Ok(v) => v,
+            Err(e) => return err(format!("fieldsJson 解析失败: {e}")),
+        };
+        if raw.is_empty() {
+            return err("没有要写入的字段");
+        }
+
+        let now = now_ms();
+        let device = a.store.device().to_string();
+        let mut entity = Entity::new("", kind.clone(), &device, now);
+        let mut bad: Vec<String> = Vec::new();
+        for (key, v) in &raw {
+            let Some(f) = def.fields.iter().find(|f| f.key == *key) else {
+                return err(format!("未知字段：{key}"));
+            };
+            let Some(val) = coerce(f.kind, v) else {
+                bad.push(format!("{}（需要 {}）", f.key, kind_name(f.kind)));
+                continue;
+            };
+            entity.fields.insert(key.clone(), val);
+        }
+        if !bad.is_empty() {
+            return err(format!("以下字段的值类型不对：{}", bad.join("；")));
+        }
+
+        let primary = def.primary.clone().unwrap_or_else(|| "name".into());
+        let name = entity.display_of(&primary).trim().to_string();
+        if name.is_empty() {
+            let label = schema
+                .field(&kind, &primary)
+                .map(|f| if f.label.is_empty() { f.key.clone() } else { f.label.clone() })
+                .unwrap_or_else(|| primary.clone());
+            return err(format!("「{label}」不能为空"));
+        }
+
+        let id = if id_hint.trim().is_empty() {
+            name.clone()
+        } else {
+            id_hint.trim().to_string()
+        };
+        if let Some(existing) = a.store.read(|m| m.entities.get(&id).cloned()) {
+            return json!({
+                "error": if existing.deleted {
+                    format!("《{name}》在回收站里，先恢复或换个名字")
+                } else {
+                    format!("已存在《{name}》")
+                },
+                "existing_id": id,
+                "deleted": existing.deleted,
+            });
+        }
+
+        entity.id = id.clone();
+        entity.rev = a.store.stats().rev + 1;
+        let op = Op::UpsertEntity { entity: entity.clone() };
+        match a.store.mutate(&[op]) {
+            Ok(_) => json!({ "ok": true, "id": entity.id, "rev": entity.rev, "name": name }),
+            Err(e) => err(e),
+        }
+    })
+}
+
+/// 删除 = 写墓碑（保留 30 天，可在回收站恢复），**绝不物理删**。
+#[uniffi::export]
+pub fn delete_entity(entity_id: String) -> String {
+    call(|a| {
+        let Some(e) = a.store.read(|m| m.entities.get(&entity_id).cloned()) else {
+            return err(format!("实体不存在：{entity_id}"));
+        };
+        if e.deleted {
+            return err("这条已经在回收站里了");
+        }
+        let now = now_ms();
+        let rev = a.store.stats().rev + 1;
+        let device = a.store.device().to_string();
+        let op = Op::Tombstone {
+            id: entity_id.clone(),
+            rev,
+            updated_at: now,
+            device,
+        };
+        match a.store.mutate(&[op]) {
+            Ok(_) => json!({ "ok": true, "id": entity_id, "deleted_at": now }),
+            Err(e) => err(e),
+        }
+    })
+}
+
+/// 从回收站恢复（写一条 deleted=false 的新快照，历史里会多一条 restore）。
+#[uniffi::export]
+pub fn restore_entity(entity_id: String) -> String {
+    call(|a| {
+        let Some(mut e) = a.store.read(|m| m.entities.get(&entity_id).cloned()) else {
+            return err(format!("实体不存在：{entity_id}"));
+        };
+        if !e.deleted {
+            return err("这条没有被删除");
+        }
+        let now = now_ms();
+        e.deleted = false;
+        e.rev = a.store.stats().rev + 1;
+        e.updated_at = now;
+        e.device = a.store.device().to_string();
+        let rev = e.rev;
+        let op = Op::UpsertEntity { entity: e };
+        match a.store.mutate(&[op]) {
+            Ok(_) => json!({ "ok": true, "id": entity_id, "rev": rev }),
+            Err(e) => err(e),
+        }
+    })
+}
+
+/// 回收站列表（只读）。
+#[uniffi::export]
+pub fn list_deleted() -> String {
+    call(|a| {
+        let kind = a
+            .store
+            .read(|m| m.schema.as_ref().and_then(|s| s.entities.first().map(|e| e.kind.clone())))
+            .unwrap_or_else(|| "herb".into());
+        let primary = a
+            .store
+            .read(|m| {
+                m.schema
+                    .as_ref()
+                    .and_then(|s| s.entity_def(&kind).and_then(|d| d.primary.clone()))
+            })
+            .unwrap_or_else(|| "name".into());
+        let items: Vec<Json> = a.store.read(|m| {
+            m.entities
+                .values()
+                .filter(|e| e.deleted)
+                .map(|e| {
+                    json!({
+                        "id": e.id,
+                        "kind": e.kind,
+                        "name": e.display_of(&primary),
+                        "deleted_at": e.updated_at,
+                        "rev": e.rev,
+                        "device": e.device,
+                    })
+                })
+                .collect()
+        });
+        json!({ "items": items })
+    })
+}
+
+/// 单条实体的字段级变更时间线（最近 `limit` 条）。
+#[uniffi::export]
+pub fn entity_history(entity_id: String, limit: u32) -> String {
+    call(|a| {
+        let limit = if limit == 0 { 50 } else { limit as usize };
+        match a.store.entity_history(&entity_id, limit) {
+            Ok(items) => json!({ "items": items }),
+            Err(e) => err(e),
+        }
+    })
+}
+
+/// 撤销这条实体最近一次**本机**编辑：把上一版快照写回去，产生新事件（rev 递增）。
+#[uniffi::export]
+pub fn undo_edit(entity_id: String) -> String {
+    call(|a| match a.store.undo_entity(&entity_id, now_ms()) {
+        Ok((rev, restored)) => json!({ "ok": true, "id": entity_id, "rev": rev, "restored": restored }),
+        Err(e) => err(e),
+    })
+}
+
 /// 写入 `sync.json` 并立即重建同步引擎，不需要重启 APP。
 ///
 /// `config_json` 就是 `SyncConfig` 的 JSON（含 `targets` 数组）；凭据允许直接写明文，
@@ -940,6 +1162,45 @@ mod tests {
         assert!(views().contains("matrix"));
         assert!(quiz(1).contains("cards"));
         assert!(upstream_status().contains("topology"));
+        // ---- 新建 / 编辑 / 历史 / 撤销 / 删除 / 恢复（同一次全局 STATE 里串起来） ----
+        let created = create_entity(
+            "herb".into(),
+            r#"{"name":"测试药","effects":"解表|清热","nature":"苦，寒"}"#.into(),
+            "".into(),
+        );
+        assert!(created.contains("\"ok\":true"), "{created}");
+        assert!(created.contains("测试药"), "{created}");
+
+        // 重名必须拒绝，并把已有 id 带回去让 UI 决定「去编辑」还是「改名」
+        let dup = create_entity("herb".into(), r#"{"name":"测试药"}"#.into(), "".into());
+        assert!(dup.contains("已存在"), "{dup}");
+        assert!(dup.contains("existing_id"), "{dup}");
+
+        let edited = edit_entity("测试药".into(), r#"{"effects":"解表|清热|解毒"}"#.into());
+        assert!(edited.contains("\"ok\":true"), "{edited}");
+
+        let hist = entity_history("测试药".into(), 10);
+        assert!(hist.contains("\"action\":\"create\""), "{hist}");
+        assert!(hist.contains("解毒"), "{hist}");
+
+        let undone = undo_edit("测试药".into());
+        assert!(undone.contains("\"ok\":true"), "{undone}");
+        assert!(undone.contains("effects"), "{undone}");
+        let detail = entity_detail("测试药".into());
+        assert!(detail.contains("解表、清热"), "撤销后应回到改前的值：{detail}");
+        assert!(!detail.contains("解毒"), "{detail}");
+
+        let del = delete_entity("测试药".into());
+        assert!(del.contains("\"ok\":true"), "{del}");
+        assert!(list_deleted().contains("测试药"), "{}", list_deleted());
+        // 墓碑不参与视图
+        assert!(!view("matrix".into()).contains("测试药"));
+
+        let res = restore_entity("测试药".into());
+        assert!(res.contains("\"ok\":true"), "{res}");
+        assert!(!list_deleted().contains("测试药"));
+        assert!(view("matrix".into()).contains("测试药"));
+
         let _ = fs::remove_dir_all(&root);
     }
 

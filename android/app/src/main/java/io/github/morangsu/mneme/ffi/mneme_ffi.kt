@@ -751,6 +751,20 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -770,9 +784,17 @@ internal interface IntegrityCheckingUniffiLib : Library {
 ): Short
 fun uniffi_mneme_ffi_checksum_func_configure_sync(
 ): Short
+fun uniffi_mneme_ffi_checksum_func_create_entity(
+): Short
+fun uniffi_mneme_ffi_checksum_func_delete_entity(
+): Short
 fun uniffi_mneme_ffi_checksum_func_edit_entity(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_entity_detail(
+): Short
+fun uniffi_mneme_ffi_checksum_func_entity_history(
+): Short
+fun uniffi_mneme_ffi_checksum_func_entity_template(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_export_data(
 ): Short
@@ -780,9 +802,13 @@ fun uniffi_mneme_ffi_checksum_func_import_data(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_judge(
 ): Short
+fun uniffi_mneme_ffi_checksum_func_list_deleted(
+): Short
 fun uniffi_mneme_ffi_checksum_func_open_database(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_quiz(
+): Short
+fun uniffi_mneme_ffi_checksum_func_restore_entity(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_reverse(
 ): Short
@@ -793,6 +819,8 @@ fun uniffi_mneme_ffi_checksum_func_set_schema(
 fun uniffi_mneme_ffi_checksum_func_state(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_sync(
+): Short
+fun uniffi_mneme_ffi_checksum_func_undo_edit(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_upstream_adopt(
 ): Short
@@ -855,9 +883,17 @@ internal interface UniffiLib : Library {
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_configure_sync(`configJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_create_entity(`kind`: RustBuffer.ByValue,`fieldsJson`: RustBuffer.ByValue,`idHint`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_delete_entity(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_edit_entity(`entityId`: RustBuffer.ByValue,`fieldsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_entity_detail(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_entity_history(`entityId`: RustBuffer.ByValue,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_entity_template(`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_export_data(`format`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -865,9 +901,13 @@ fun uniffi_mneme_ffi_fn_func_import_data(`content`: RustBuffer.ByValue,`filename
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_judge(`cardId`: RustBuffer.ByValue,`input`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_list_deleted(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_open_database(`path`: RustBuffer.ByValue,`device`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_quiz(`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_restore_entity(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_reverse(`cluesJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -878,6 +918,8 @@ fun uniffi_mneme_ffi_fn_func_set_schema(`toml`: RustBuffer.ByValue,uniffi_out_er
 fun uniffi_mneme_ffi_fn_func_state(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_sync(`targetId`: RustBuffer.ByValue,`dry`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_undo_edit(`entityId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_upstream_adopt(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1023,10 +1065,22 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_configure_sync() != 38613.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mneme_ffi_checksum_func_create_entity() != 8125.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_delete_entity() != 63764.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mneme_ffi_checksum_func_edit_entity() != 57919.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_entity_detail() != 37447.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_entity_history() != 1521.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_entity_template() != 14894.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_export_data() != 9957.toShort()) {
@@ -1038,10 +1092,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_judge() != 45969.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mneme_ffi_checksum_func_list_deleted() != 21048.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mneme_ffi_checksum_func_open_database() != 12704.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_quiz() != 42537.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_restore_entity() != 18817.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_reverse() != 56252.toShort()) {
@@ -1057,6 +1117,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_sync() != 32170.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_undo_edit() != 6202.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_upstream_adopt() != 8626.toShort()) {
@@ -1306,6 +1369,33 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     
 
         /**
+         * 新建一条实体。`immutable` 字段**允许**在这里填写 —— 这正是「教材抄错一个字」的合法出路：
+         * 不改原条目，另建一条并标 `supersedes`。
+         *
+         * 重名不自动覆盖，返回 `existing_id` 让 UI 决定「去编辑」还是「换个名字」。
+         */ fun `createEntity`(`kind`: kotlin.String, `fieldsJson`: kotlin.String, `idHint`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_create_entity(
+        FfiConverterString.lower(`kind`),FfiConverterString.lower(`fieldsJson`),FfiConverterString.lower(`idHint`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 删除 = 写墓碑（保留 30 天，可在回收站恢复），**绝不物理删**。
+         */ fun `deleteEntity`(`entityId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_delete_entity(
+        FfiConverterString.lower(`entityId`),_status)
+}
+    )
+    }
+    
+
+        /**
          * 批量改一条实体的字段。`fields_json` 形如 `{"effects":"a|b","dosage":"3-10g"}`。
          *
          * - `immutable` 字段一律拒改（性味归经、用量、配伍禁忌这类「原样字段」），
@@ -1329,6 +1419,30 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_entity_detail(
         FfiConverterString.lower(`entityId`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 单条实体的字段级变更时间线（最近 `limit` 条）。
+         */ fun `entityHistory`(`entityId`: kotlin.String, `limit`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_entity_history(
+        FfiConverterString.lower(`entityId`),FfiConverterUInt.lower(`limit`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 空白表单的字段定义（新建用）。与 `entityDetail` 同构，只是值全空。
+         */ fun `entityTemplate`(`kind`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_entity_template(
+        FfiConverterString.lower(`kind`),_status)
 }
     )
     }
@@ -1360,6 +1474,18 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     )
     }
     
+
+        /**
+         * 回收站列表（只读）。
+         */ fun `listDeleted`(): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_list_deleted(
+        _status)
+}
+    )
+    }
+    
  fun `openDatabase`(`path`: kotlin.String, `device`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
@@ -1374,6 +1500,18 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_quiz(
         FfiConverterUInt.lower(`limit`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 从回收站恢复（写一条 deleted=false 的新快照，历史里会多一条 restore）。
+         */ fun `restoreEntity`(`entityId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_restore_entity(
+        FfiConverterString.lower(`entityId`),_status)
 }
     )
     }
@@ -1423,6 +1561,18 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_sync(
         FfiConverterString.lower(`targetId`),FfiConverterBoolean.lower(`dry`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 撤销这条实体最近一次**本机**编辑：把上一版快照写回去，产生新事件（rev 递增）。
+         */ fun `undoEdit`(`entityId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_undo_edit(
+        FfiConverterString.lower(`entityId`),_status)
 }
     )
     }

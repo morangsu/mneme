@@ -13,6 +13,7 @@
 
 mod error;
 mod eventlog;
+mod history;
 mod memory;
 mod op;
 mod snapshot;
@@ -22,6 +23,7 @@ pub mod sqlite_mirror;
 
 pub use error::{Error, Result};
 pub use eventlog::{EventLog, sanitize};
+pub use history::{EntityRevision, FieldChange};
 pub use memory::Memory;
 pub use op::Op;
 pub use snapshot::{Snapshot, SnapshotStore, FORMAT};
@@ -358,6 +360,100 @@ enumerate_if_ambiguous = true
         drop(b);
         let c = Store::open(&root, "win").unwrap();
         assert_eq!(c.stats().entities, 3, "重放应读到两台设备的分片");
+    }
+
+    /// 与 make_herb 的区别：`|` 拆成多个标签（更接近真实编辑后的值），并指定 rev/设备/时间。
+    fn edited(id: &str, effects: &str, rev: u64, device: &str, ts: i64) -> Entity {
+        let mut e = Entity::new(id, "herb", device, ts);
+        e.set("name", Value::Text(id.into()), ts);
+        e.set(
+            "effects",
+            Value::Tags(effects.split('|').map(|s| s.to_string()).collect()),
+            ts,
+        );
+        e.rev = rev;
+        e
+    }
+
+    #[test]
+    fn history_reports_field_level_changes() {
+        let root = tmp("hist");
+        let s = seed(&root, "win");
+        s.mutate(&[Op::UpsertEntity {
+            entity: edited("麻黄", "发汗解表|宣肺平喘", 2, "win", 2000),
+        }])
+        .unwrap();
+
+        let h = s.entity_history("麻黄", 10).unwrap();
+        assert_eq!(h.len(), 2, "创建 + 一次修改：{h:?}");
+        assert_eq!(h[0].action, "create");
+        assert_eq!(h[0].changes.len(), 2, "name 与 effects 都是新字段");
+        assert_eq!(h[1].action, "update");
+        assert_eq!(h[1].changes.len(), 1, "只有 effects 变了");
+        assert_eq!(h[1].changes[0].key, "effects");
+        assert_eq!(h[1].changes[0].before, "宣肺平喘");
+        assert_eq!(h[1].changes[0].after, "发汗解表、宣肺平喘");
+        assert_eq!(h[1].ts, 2000);
+    }
+
+    #[test]
+    fn undo_restores_previous_values() {
+        let root = tmp("undo");
+        let s = seed(&root, "win");
+        s.mutate(&[Op::UpsertEntity {
+            entity: edited("麻黄", "发汗解表|宣肺平喘", 2, "win", 2000),
+        }])
+        .unwrap();
+
+        let (rev, restored) = s.undo_entity("麻黄", 3000).unwrap();
+        assert_eq!(restored, vec!["effects".to_string()]);
+        assert!(rev > 2, "撤销要产生更大的 rev，而不是回退");
+        assert_eq!(
+            s.read(|m| m.entities["麻黄"].get("effects").unwrap().display()),
+            "宣肺平喘"
+        );
+        // 撤销本身也是一条历史
+        let h = s.entity_history("麻黄", 10).unwrap();
+        assert_eq!(h.len(), 3);
+        assert_eq!(h[2].action, "update");
+        assert_eq!(h[2].changes[0].after, "宣肺平喘");
+    }
+
+    #[test]
+    fn undo_rejects_change_from_another_device() {
+        let root = tmp("undo-dev");
+        let s = seed(&root, "win");
+        s.mutate(&[Op::UpsertEntity {
+            entity: edited("麻黄", "上游改的", 2, "upstream", 2000),
+        }])
+        .unwrap();
+        let err = s.undo_entity("麻黄", 3000).unwrap_err().to_string();
+        assert!(err.contains("不能在本机撤销"), "{err}");
+    }
+
+    #[test]
+    fn undo_rejects_freshly_created_entity() {
+        let root = tmp("undo-new");
+        let s = seed(&root, "win");
+        let err = s.undo_entity("桂枝", 3000).unwrap_err().to_string();
+        assert!(err.contains("新建"), "{err}");
+    }
+
+    #[test]
+    fn tombstone_shows_up_in_history() {
+        let root = tmp("hist-del");
+        let s = seed(&root, "win");
+        let rev = s.stats().rev;
+        s.mutate(&[Op::Tombstone {
+            id: "麻黄".into(),
+            rev,
+            updated_at: 4000,
+            device: "win".into(),
+        }])
+        .unwrap();
+        let h = s.entity_history("麻黄", 10).unwrap();
+        assert_eq!(h.last().unwrap().action, "delete");
+        assert_eq!(h.last().unwrap().ts, 4000);
     }
 
     #[test]

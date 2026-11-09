@@ -58,6 +58,12 @@ fun EntityEditorDialog(
     var result by remember { mutableStateOf<JSONObject?>(null) }
     var busy by remember { mutableStateOf(false) }
     var onlyEditable by remember { mutableStateOf(true) }
+    // 详情原始 JSON：复制为新条目时要整份预填
+    var detail by remember { mutableStateOf<JSONObject?>(null) }
+    var showHistory by remember { mutableStateOf(false) }
+    var showCopy by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<String?>(null) }
     val edits = remember { mutableStateMapOf<String, String>() }
     val scope = rememberCoroutineScope()
 
@@ -70,6 +76,7 @@ fun EntityEditorDialog(
             error = e
             return
         }
+        detail = d
         title = d.optString("title", "编辑").ifBlank { "编辑" }
         subtitle = "rev ${d.optInt("rev")} · ${d.optString("kind")}"
         val arr = d.arrayOrEmpty("fields")
@@ -174,6 +181,10 @@ fun EntityEditorDialog(
 
                 error?.let { ErrorBanner(it) }
 
+                notice?.let {
+                    Text(it, color = MnemeColors.Ok, fontSize = 12.sp)
+                }
+
                 result?.let { r ->
                     val n = r.arrayOrEmpty("changed").length()
                     Text(
@@ -235,6 +246,35 @@ fun EntityEditorDialog(
                     }
                 }
 
+                // 撤销 / 历史 / 复制为新 / 删除：编辑之外的四条出口
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    GhostButton("撤销", enabled = !busy, onClick = {
+                        busy = true
+                        notice = null
+                        error = null
+                        scope.launch {
+                            val r = Api.undoEdit(entityId)
+                            busy = false
+                            val e = r.err()
+                            if (e != null) {
+                                error = e
+                            } else {
+                                val n = r.arrayOrEmpty("restored").length()
+                                notice = "已撤销最近一次编辑（$n 个字段），rev ${r.optInt("rev")}"
+                                result = null
+                                loadDetail()
+                                onSaved()
+                            }
+                        }
+                    })
+                    GhostButton("历史", enabled = !busy, onClick = { showHistory = true })
+                    GhostButton("复制为新", enabled = !busy, onClick = { showCopy = true })
+                    GhostButton("删除", enabled = !busy, onClick = { confirmDelete = true })
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -246,6 +286,61 @@ fun EntityEditorDialog(
                         onClick = { save() },
                     )
                     GhostButton(text = "完成", enabled = !busy, onClick = onDismiss)
+                }
+            }
+        }
+    }
+
+    if (showHistory) {
+        HistoryDialog(entityId = entityId, onDismiss = { showHistory = false })
+    }
+    if (showCopy) {
+        CreateEntityDialog(
+            kind = detail?.optString("kind").orEmpty().ifBlank { "herb" },
+            prefill = detail,
+            onDismiss = { showCopy = false },
+            onSaved = { newId ->
+                showCopy = false
+                notice = "已新建《$newId》，旧条目已标为被替代"
+                onSaved()
+            },
+        )
+    }
+    if (confirmDelete) {
+        Dialog(
+            onDismissRequest = { confirmDelete = false },
+            properties = DialogProperties(usePlatformDefaultWidth = true),
+        ) {
+            Surface(color = MnemeColors.Panel, shape = RoundedCornerShape(12.dp)) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("删除「$title」？", color = MnemeColors.Text, fontSize = 15.sp)
+                    Text(
+                        "只会写墓碑，30 天内在回收站可以恢复。",
+                        color = MnemeColors.TextDim,
+                        fontSize = 12.sp,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AccentButton("确认删除", enabled = !busy, onClick = {
+                            busy = true
+                            scope.launch {
+                                val r = Api.deleteEntity(entityId)
+                                busy = false
+                                val e = r.err()
+                                if (e != null) {
+                                    error = e
+                                    confirmDelete = false
+                                } else {
+                                    confirmDelete = false
+                                    onSaved()
+                                    onDismiss()
+                                }
+                            }
+                        })
+                        GhostButton("取消", onClick = { confirmDelete = false })
+                    }
                 }
             }
         }

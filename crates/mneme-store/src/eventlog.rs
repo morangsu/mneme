@@ -89,6 +89,28 @@ impl EventLog {
         Ok(applied)
     }
 
+    /// 读出全部原始操作（文件名序 + 文件内顺序）。
+    ///
+    /// 与 `replay` 的差别：replay 只关心"最终状态"，会丢掉被幂等键去重的重复行；
+    /// 历史和撤销要的是**操作序列**，所以这里不过 `Memory`，直接逐行反序列化。
+    /// 容错策略与 replay 一致：坏行/截断行跳过。
+    pub fn read_ops(&self) -> Result<Vec<Op>> {
+        let mut out = Vec::new();
+        for path in self.list_files()? {
+            let f = fs::File::open(&path)?;
+            for line in BufReader::new(f).lines() {
+                let Ok(line) = line else { break };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(op) = serde_json::from_str::<Op>(&line) {
+                    out.push(op);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     pub fn read_device_bytes(&self, device: &str) -> Result<Vec<u8>> {
         let p = self.file_for(device);
         if !p.exists() {

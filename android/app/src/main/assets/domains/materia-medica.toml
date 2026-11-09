@@ -115,6 +115,27 @@ key = "mastery"
 label = "掌握度"
 kind = "text"
 
+# 个人笔记：白名单里早就有 notes，但以前没在领域包里定义，等于无处可写
+[[entities.fields]]
+key = "notes"
+label = "我的笔记"
+kind = "text"
+weight = 0.2
+
+# 「替代了哪一条」：原样字段抄错时，新建修订版并指回旧条目，旧条目自动隐藏
+[[entities.fields]]
+key = "supersedes"
+label = "替代自"
+kind = "text"
+weight = 0.2
+
+# 手工覆盖掌握度的时间戳；30 天内派生值不覆盖用户判断
+[[entities.fields]]
+key = "mastery_override_at"
+label = "掌握度手填时间"
+kind = "number"
+weight = 0.2
+
 # 「知道部分回答其余」= 给哪些字段、答哪些字段，声明式描述，引擎自动生成反向卡
 [[entities.directions]]
 id = "name_to_chain"
@@ -171,6 +192,8 @@ id = "matrix"
 label = "药群矩阵"
 columns = ["name", "effects", "features", "indications"]
 group_by = "group_name"
+# 被替代的旧条目不在主视图出现（防止修订版和旧版同时看到、练到）
+filter = { field = "supersedes", op = "eq", value = "" }
 
 [[views]]
 id = "danger"
@@ -182,6 +205,12 @@ id = "diff"
 label = "考前差异"
 columns = ["name", "effects", "features", "contraindications"]
 filter = { field = "mastery", op = "ne", value = "熟练" }
+
+[[views]]
+id = "superseded"
+label = "已被替代"
+columns = ["name", "supersedes", "nature", "dosage"]
+filter = { field = "supersedes", op = "ne", value = "" }
 
 [[views]]
 id = "synonyms"

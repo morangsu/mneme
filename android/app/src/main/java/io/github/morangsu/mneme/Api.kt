@@ -39,6 +39,13 @@ object MnemeApiStub {
         "quiz" -> SAMPLE_QUIZ
         "answer" -> SAMPLE_ANSWER
         "entityDetail" -> SAMPLE_ENTITY_DETAIL
+        "entityTemplate" -> SAMPLE_ENTITY_DETAIL
+        "createEntity" -> JSONObject().put("ok", true).put("id", "测试药").put("rev", 1).put("name", "测试药").toString()
+        "deleteEntity" -> JSONObject().put("ok", true).put("id", args["entityId"] ?: "").put("deleted_at", 0).toString()
+        "restoreEntity" -> JSONObject().put("ok", true).put("id", args["entityId"] ?: "").put("rev", 9).toString()
+        "listDeleted" -> "{\"items\":[]}"
+        "entityHistory" -> "{\"items\":[]}"
+        "undoEdit" -> JSONObject().put("ok", true).put("rev", 9).put("restored", JSONArray().put("effects")).toString()
         "editEntity" -> JSONObject()
             .put("ok", true)
             .put("id", args["entityId"] ?: "")
@@ -237,6 +244,19 @@ object MnemeBridge {
                 "editEntity" -> MnemeApi.editEntity(
                     args["entityId"] as String, args["fieldsJson"] as String
                 )
+                "entityTemplate" -> MnemeApi.entityTemplate(args["kind"] as String)
+                "createEntity" -> MnemeApi.createEntity(
+                    args["kind"] as String,
+                    args["fieldsJson"] as String,
+                    args["idHint"] as String,
+                )
+                "deleteEntity" -> MnemeApi.deleteEntity(args["entityId"] as String)
+                "restoreEntity" -> MnemeApi.restoreEntity(args["entityId"] as String)
+                "listDeleted" -> MnemeApi.listDeleted()
+                "entityHistory" -> MnemeApi.entityHistory(
+                    args["entityId"] as String, args["limit"] as UInt
+                )
+                "undoEdit" -> MnemeApi.undoEdit(args["entityId"] as String)
                 "configureSync" -> MnemeApi.configureSync(args["configJson"] as String)
                 "importData" -> MnemeApi.importData(
                     args["content"] as String,
@@ -323,6 +343,26 @@ object Api {
     /** 批量改字段；fieldsJson 形如 {"effects":"a|b"}。immutable 字段会被 Rust 侧拒绝。 */
     suspend fun editEntity(entityId: String, fieldsJson: String): JSONObject =
         call("editEntity", mapOf("entityId" to entityId, "fieldsJson" to fieldsJson))
+
+    suspend fun entityTemplate(kind: String): JSONObject =
+        call("entityTemplate", mapOf("kind" to kind))
+
+    suspend fun createEntity(kind: String, fieldsJson: String, idHint: String = ""): JSONObject =
+        call("createEntity", mapOf("kind" to kind, "fieldsJson" to fieldsJson, "idHint" to idHint))
+
+    suspend fun deleteEntity(entityId: String): JSONObject =
+        call("deleteEntity", mapOf("entityId" to entityId))
+
+    suspend fun restoreEntity(entityId: String): JSONObject =
+        call("restoreEntity", mapOf("entityId" to entityId))
+
+    suspend fun listDeleted(): JSONObject = call("listDeleted")
+
+    suspend fun entityHistory(entityId: String, limit: UInt = 50u): JSONObject =
+        call("entityHistory", mapOf("entityId" to entityId, "limit" to limit))
+
+    suspend fun undoEdit(entityId: String): JSONObject =
+        call("undoEdit", mapOf("entityId" to entityId))
 
     suspend fun importData(content: String, filename: String, dry: Boolean): JSONObject =
         call("importData", mapOf("content" to content, "filename" to filename, "dry" to dry))
