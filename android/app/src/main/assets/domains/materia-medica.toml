@@ -1,0 +1,195 @@
+# 中药学（第六版 · 钟赣生 / 杨柏灿 主编）
+# 加一门学科只需要这一份 TOML，不改任何 Rust 代码。
+id = "materia-medica"
+name = "中药学"
+version = 1
+description = "药群共性做基座，每味药只挂差异标签；功效当索引，应用由功效推；危险区原样记。"
+
+[[entities]]
+kind = "herb"
+label = "药物"
+primary = "name"
+group_kind = "group"
+
+[[entities.fields]]
+key = "name"
+label = "药名"
+kind = "text"
+indexable = true
+required = true
+
+[[entities.fields]]
+key = "group_name"
+label = "药群"
+kind = "text"
+indexable = true
+
+[[entities.fields]]
+key = "effects"
+label = "功效"
+kind = "tags"
+indexable = true
+reversible = true
+weight = 2.0
+
+[[entities.fields]]
+key = "indications"
+label = "应用"
+kind = "tags"
+indexable = true
+reversible = true
+
+[[entities.fields]]
+key = "features"
+label = "特点锚"
+kind = "tags"
+indexable = true
+reversible = true
+weight = 1.5
+
+[[entities.fields]]
+key = "contraindications"
+label = "禁忌"
+kind = "tags"
+indexable = true
+reversible = true
+
+[[entities.fields]]
+key = "nature"
+label = "性味归经"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "toxicity"
+label = "毒性"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "dosage"
+label = "用量"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "compatibility"
+label = "配伍禁忌"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "decoction"
+label = "特殊煎法"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "differential"
+label = "相似药鉴别"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "processing"
+label = "炮制差异"
+kind = "text"
+
+[[entities.fields]]
+key = "canonical"
+label = "教材主表述"
+kind = "text"
+
+[[entities.fields]]
+key = "synonyms"
+label = "可替换说法"
+kind = "tags"
+
+[[entities.fields]]
+key = "boundary"
+label = "不可替换边界"
+kind = "text"
+
+[[entities.fields]]
+key = "mastery"
+label = "掌握度"
+kind = "text"
+
+# 「知道部分回答其余」= 给哪些字段、答哪些字段，声明式描述，引擎自动生成反向卡
+[[entities.directions]]
+id = "name_to_chain"
+label = "药名推全链"
+clue_fields = ["name"]
+answer_fields = ["effects", "indications", "features", "contraindications"]
+
+[[entities.directions]]
+id = "effect_to_name"
+label = "功效推药名"
+clue_fields = ["effects"]
+answer_fields = ["name"]
+scope = "group_name"
+enumerate_if_ambiguous = true
+
+[[entities.directions]]
+id = "indication_to_name"
+label = "应用推药名"
+clue_fields = ["indications"]
+answer_fields = ["name", "effects"]
+scope = "group_name"
+enumerate_if_ambiguous = true
+
+[[entities.directions]]
+id = "feature_to_name"
+label = "特点推药名"
+clue_fields = ["features"]
+answer_fields = ["name"]
+scope = "group_name"
+enumerate_if_ambiguous = true
+
+[[entities.directions]]
+id = "contraindication_to_name"
+label = "禁忌推药名"
+clue_fields = ["contraindications"]
+answer_fields = ["name", "features"]
+scope = "group_name"
+enumerate_if_ambiguous = true
+
+[[aliases]]
+concept = "解表药"
+canonical = "以发散表邪、解除表证为主要功效"
+aliases = ["发散表邪", "解表"]
+boundary = "不能写成发汗解肌作总定义"
+
+[[aliases]]
+concept = "发汗解表"
+canonical = "发汗解表"
+aliases = ["发散表邪", "解表"]
+boundary = "性味归经、用量、配伍禁忌不合并"
+
+[[views]]
+id = "matrix"
+label = "药群矩阵"
+columns = ["name", "effects", "features", "indications"]
+group_by = "group_name"
+
+[[views]]
+id = "danger"
+label = "危险区（不合并）"
+columns = ["name", "nature", "toxicity", "dosage", "compatibility", "decoction", "differential"]
+
+[[views]]
+id = "diff"
+label = "考前差异"
+columns = ["name", "effects", "features", "contraindications"]
+filter = { field = "mastery", op = "ne", value = "熟练" }
+
+[[views]]
+id = "synonyms"
+label = "同义表述"
+columns = ["name", "canonical", "synonyms", "boundary"]
+
+[[views]]
+id = "quiz"
+label = "出题视图"
+columns = ["name", "effects", "features"]
+hidden = ["name", "effects", "features", "contraindications"]

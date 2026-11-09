@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,13 +48,17 @@ fun MatrixScreen() {
     var viewData by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var expanded by remember { mutableStateOf(false) }
+    // 装载领域包后 +1，触发重新读 state / views（否则会一直停在空库状态）
+    var reload by remember { mutableIntStateOf(0) }
+    var loaded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(reload) {
         val s = Api.state()
         if (s.err() != null) error = s.err() else stateObj = s
         val v = Api.views()
         if (v.err() != null) {
             error = v.err()
+            loaded = true
             return@LaunchedEffect
         }
         val arr = v.arrayOrEmpty("views")
@@ -62,6 +67,7 @@ fun MatrixScreen() {
             ViewDef(o.optString("id"), o.optString("label", o.optString("id")))
         }
         viewDefs = defs
+        loaded = true
         if (defs.isNotEmpty()) selectedId = defs.first().id
     }
 
@@ -96,6 +102,9 @@ fun MatrixScreen() {
             }
         }
 
+        if (loaded && viewDefs.isEmpty()) {
+            DomainSetupPanel(onInstalled = { reload++ })
+        } else {
         ExposedDropdownMenuBox(
             expanded = expanded,
             onExpandedChange = { expanded = it },
@@ -154,6 +163,7 @@ fun MatrixScreen() {
                     }
                 }
             }
+        }
         }
     }
 }

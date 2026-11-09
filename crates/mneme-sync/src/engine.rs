@@ -362,7 +362,12 @@ impl SyncEngine {
             if !own.is_empty() {
                 pushed_event_bytes = own.len();
                 bytes_up += own.len();
-                t.put(&format!("events/{device}.jsonl"), &own, None).await?;
+                // 事件分片是**可变文件**（每台设备持续追加），必须带上前一版 sha 才算条件写。
+                // 不带 sha 的 PUT 在文件已存在时会被 GitHub 拒成 422，且拿不到 412 自愈。
+                let own_path = format!("events/{device}.jsonl");
+                let own_head = t.head(&own_path).await?;
+                let own_sha = own_head.as_ref().map(|m| m.etag.clone());
+                t.put(&own_path, &own, own_sha.as_deref()).await?;
             }
         }
 

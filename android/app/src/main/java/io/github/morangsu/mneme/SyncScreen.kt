@@ -71,6 +71,14 @@ fun SyncScreen(onGoConflict: () -> Unit) {
         if (busy) LoadingBox()
         error?.let { ErrorBanner(it) }
 
+        // ---- 0. 连接配置（首次必须填一次） ----
+        SyncSettingsPanel(onSaved = {
+            scope.launch {
+                val s = Api.upstreamStatus()
+                if (s.err() == null) status = s
+            }
+        })
+
         // ---- 1. 同步目标 ----
         Panel(title = "同步目标") {
             Row(
@@ -108,7 +116,15 @@ fun SyncScreen(onGoConflict: () -> Unit) {
                     run({ Api.upstreamPull() }) { plan ->
                         pullPlan = plan
                         // 有冲突就切到「冲突」页逐项裁决；裁决完成前不写任何数据。
-                        if (plan.arrayOrEmpty("conflicts").length() > 0) onGoConflict()
+                        // 无冲突时 Rust 侧已直接落库，这里只需刷新一次上游状态。
+                        if (plan.arrayOrEmpty("conflicts").length() > 0) {
+                            onGoConflict()
+                        } else {
+                            scope.launch {
+                                val s = Api.upstreamStatus()
+                                if (s.err() == null) status = s
+                            }
+                        }
                     }
                 })
                 GhostButton("上游状态", enabled = !busy, onClick = {
@@ -118,11 +134,25 @@ fun SyncScreen(onGoConflict: () -> Unit) {
             pullPlan?.let { p ->
                 val summary = p.optString("summary", "")
                 if (summary.isNotBlank()) Text(summary, color = MnemeColors.Warn, fontSize = 12.sp)
-                Text(
-                    "待裁决 ${p.arrayOrEmpty("conflicts").length()} 项 → 已切到「冲突」页逐项决定",
-                    color = MnemeColors.Accent,
-                    fontSize = 12.sp,
-                )
+                val ap = p.optJSONObject("applied")
+                val n = p.arrayOrEmpty("conflicts").length()
+                if (ap != null) {
+                    Text(
+                        "已落库：自动合并 ${ap.optInt("auto_applied")} / 新增 ${ap.optInt("added")} / " +
+                            "移除 ${ap.optInt("removed")} / 裁决 ${ap.optInt("conflicts_resolved")} · " +
+                            "rev → ${ap.optInt("new_rev")}",
+                        color = MnemeColors.Accent,
+                        fontSize = 12.sp,
+                    )
+                } else if (p.optString("apply_error").isNotBlank()) {
+                    ErrorBanner("写入失败：" + p.optString("apply_error"))
+                } else {
+                    Text(
+                        if (n > 0) "待裁决 $n 项 → 已切到「冲突」页逐项决定" else "无需裁决，已直接合并",
+                        color = MnemeColors.Accent,
+                        fontSize = 12.sp,
+                    )
+                }
             }
         }
 

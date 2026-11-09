@@ -25,3 +25,7 @@ android/app/build/
 android/local.properties
 # 由 cargo build --target aarch64-linux-android 生成，不进仓库
 android/app/src/main/jniLibs/*/lib*.so
+
+# ---- 本地实验产物 ----
+/.tmp
+/.shots

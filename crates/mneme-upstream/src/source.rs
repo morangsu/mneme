@@ -78,6 +78,21 @@ impl GitHubPublicSource {
     pub fn repo(&self) -> &RepoRef {
         &self.repo
     }
+
+    /// 直接用给定 token。
+    ///
+    /// Android 上没有环境变量，而匿名请求只有 60 次/小时、且在部分网络下会被直接掐断；
+    /// APP 已经为私有库配了凭据，公开库是只读的，复用同一 token 更稳（5000 次/小时）。
+    pub fn with_token(repo: RepoRef, file: &str, token: Option<String>) -> Self {
+        Self {
+            id: repo.slug(),
+            repo,
+            token,
+            file: file.to_string(),
+            client: reqwest::Client::new(),
+            etag: Mutex::new(None),
+        }
+    }
 }
 
 #[async_trait]

@@ -111,7 +111,8 @@ impl Topology {
             },
             public_data: RepoRef {
                 owner: owner.into(), repo: "mneme-data-public".into(), branch: "main".into(),
-                path: "data".into(), token_env: None,
+                // 公共库根目录就是公开内容（*.toml / *.csv / bundle.json），不再套一层 data/
+                path: String::new(), token_env: None,
             },
             private_data: RepoRef {
                 owner: owner.into(), repo: "mneme-data-private".into(), branch: "main".into(),

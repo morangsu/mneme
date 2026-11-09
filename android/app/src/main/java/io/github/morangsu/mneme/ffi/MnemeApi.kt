@@ -5,6 +5,7 @@ package io.github.morangsu.mneme.ffi
 // 这里把它们包成 object，让 APP 侧统一以 MnemeApi.xxx() 调用，
 // 也避免业务代码依赖生成文件的内部命名。别名 import 防止与 object 方法同名递归。
 import io.github.morangsu.mneme.ffi.answer as ffiAnswer
+import io.github.morangsu.mneme.ffi.configureSync as ffiConfigureSync
 import io.github.morangsu.mneme.ffi.exportData as ffiExportData
 import io.github.morangsu.mneme.ffi.importData as ffiImportData
 import io.github.morangsu.mneme.ffi.judge as ffiJudge
@@ -12,6 +13,7 @@ import io.github.morangsu.mneme.ffi.openDatabase as ffiOpenDatabase
 import io.github.morangsu.mneme.ffi.quiz as ffiQuiz
 import io.github.morangsu.mneme.ffi.reverse as ffiReverse
 import io.github.morangsu.mneme.ffi.review as ffiReview
+import io.github.morangsu.mneme.ffi.setSchema as ffiSetSchema
 import io.github.morangsu.mneme.ffi.state as ffiState
 import io.github.morangsu.mneme.ffi.sync as ffiSync
 import io.github.morangsu.mneme.ffi.upstreamAdopt as ffiUpstreamAdopt
@@ -44,4 +46,10 @@ object MnemeApi {
     fun importData(content: String, filename: String, dry: Boolean): String =
         ffiImportData(content, filename, dry)
     fun exportData(format: String): String = ffiExportData(format)
+
+    /** 安装领域包（TOML 原文），首次建库用。 */
+    fun setSchema(toml: String): String = ffiSetSchema(toml)
+
+    /** 写入 sync.json 并重建同步引擎；configJson 为 SyncConfig 的 JSON。 */
+    fun configureSync(configJson: String): String = ffiConfigureSync(configJson)
 }

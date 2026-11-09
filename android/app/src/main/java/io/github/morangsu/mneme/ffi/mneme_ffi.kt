@@ -743,6 +743,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -760,6 +764,8 @@ internal interface IntegrityCheckingUniffiLib : Library {
     // Integrity check functions only
     fun uniffi_mneme_ffi_checksum_func_answer(
 ): Short
+fun uniffi_mneme_ffi_checksum_func_configure_sync(
+): Short
 fun uniffi_mneme_ffi_checksum_func_export_data(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_import_data(
@@ -773,6 +779,8 @@ fun uniffi_mneme_ffi_checksum_func_quiz(
 fun uniffi_mneme_ffi_checksum_func_reverse(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_review(
+): Short
+fun uniffi_mneme_ffi_checksum_func_set_schema(
 ): Short
 fun uniffi_mneme_ffi_checksum_func_state(
 ): Short
@@ -837,6 +845,8 @@ internal interface UniffiLib : Library {
     // FFI functions
     fun uniffi_mneme_ffi_fn_func_answer(`cardId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_configure_sync(`configJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_export_data(`format`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_import_data(`content`: RustBuffer.ByValue,`filename`: RustBuffer.ByValue,`dry`: Byte,uniffi_out_err: UniffiRustCallStatus, 
@@ -850,6 +860,8 @@ fun uniffi_mneme_ffi_fn_func_quiz(`limit`: Int,uniffi_out_err: UniffiRustCallSta
 fun uniffi_mneme_ffi_fn_func_reverse(`cluesJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_review(`cardId`: RustBuffer.ByValue,`grade`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_mneme_ffi_fn_func_set_schema(`toml`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_mneme_ffi_fn_func_state(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -996,6 +1008,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_answer() != 47563.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mneme_ffi_checksum_func_configure_sync() != 38613.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mneme_ffi_checksum_func_export_data() != 9957.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1015,6 +1030,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_review() != 13916.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_mneme_ffi_checksum_func_set_schema() != 27481.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_state() != 30425.toShort()) {
@@ -1253,6 +1271,21 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     )
     }
     
+
+        /**
+         * 写入 `sync.json` 并立即重建同步引擎，不需要重启 APP。
+         *
+         * `config_json` 就是 `SyncConfig` 的 JSON（含 `targets` 数组）；凭据允许直接写明文，
+         * 也可以写 `${ENV:VAR}`。APP 侧存在私有目录里，不外出。
+         */ fun `configureSync`(`configJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_configure_sync(
+        FfiConverterString.lower(`configJson`),_status)
+}
+    )
+    }
+    
  fun `exportData`(`format`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
@@ -1312,6 +1345,19 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_review(
         FfiConverterString.lower(`cardId`),FfiConverterUByte.lower(`grade`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * 安装 / 切换领域包。APP 首次启动时从内置 assets 读 TOML 调这里，
+         * 之后再导入数据或从公共库拉取。schema 落成 `SetSchema` 事件，可重放、可同步。
+         */ fun `setSchema`(`toml`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_set_schema(
+        FfiConverterString.lower(`toml`),_status)
 }
     )
     }

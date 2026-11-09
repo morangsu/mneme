@@ -146,9 +146,20 @@ pub fn open_database(path: String, device: String) -> String {
     let root = PathBuf::from(&path);
     let result = (|| -> std::result::Result<Json, String> {
         let store = Store::open(&root, &device).map_err(|e| e.to_string())?;
-        let engine = SyncConfig::from_file(&root.join("sync.json"))
-            .ok()
-            .map(|c| Arc::new(SyncEngine::new(store.clone(), c)));
+        let cfg = SyncConfig::from_file(&root.join("sync.json")).ok();
+        // 公开库是只读的；把私有库的 token 复用过去，
+        // 免掉匿名 60/h 配额（手机上没有环境变量可放凭据）。
+        let gh_token = cfg.as_ref().and_then(|c| {
+            c.targets.iter().find_map(|t| match t {
+                mneme_sync::TargetConfig::GitHub { token, .. }
+                    if !token.starts_with("${ENV:") =>
+                {
+                    Some(token.clone())
+                }
+                _ => None,
+            })
+        });
+        let engine = cfg.map(|c| Arc::new(SyncEngine::new(store.clone(), c)));
         let topology = load_topology(&root);
         let provenance = load_provenance(&root);
         let public: Option<Arc<dyn PublicSource>> = {
@@ -156,9 +167,11 @@ pub fn open_database(path: String, device: String) -> String {
             if local.exists() {
                 Some(Arc::new(FilePublicSource::new(local)))
             } else {
-                GitHubPublicSource::new(topology.public_data.clone(), "bundle.json")
-                    .ok()
-                    .map(|s| Arc::new(s) as Arc<dyn PublicSource>)
+                Some(Arc::new(GitHubPublicSource::with_token(
+                    topology.public_data.clone(),
+                    "bundle.json",
+                    gh_token,
+                )) as Arc<dyn PublicSource>)
             }
         };
         let app = App {
@@ -397,6 +410,50 @@ pub fn judge(card_id: String, input: String) -> String {
     })
 }
 
+// ---------------------------------------------------------------- 首次配置
+
+/// 安装 / 切换领域包。APP 首次启动时从内置 assets 读 TOML 调这里，
+/// 之后再导入数据或从公共库拉取。schema 落成 `SetSchema` 事件，可重放、可同步。
+#[uniffi::export]
+pub fn set_schema(toml: String) -> String {
+    call(|a| {
+        let schema = match DomainSchema::from_toml(&toml) {
+            Ok(s) => s,
+            Err(e) => return err(format!("领域包解析失败: {e}")),
+        };
+        let n_entities = schema.entities.len();
+        let (id, name) = (schema.id.clone(), schema.name.clone());
+        match a.store.mutate(&[Op::SetSchema { toml }]) {
+            Ok(_) => json!({ "ok": true, "schema": id, "name": name, "entity_kinds": n_entities }),
+            Err(e) => err(e),
+        }
+    })
+}
+
+/// 写入 `sync.json` 并立即重建同步引擎，不需要重启 APP。
+///
+/// `config_json` 就是 `SyncConfig` 的 JSON（含 `targets` 数组）；凭据允许直接写明文，
+/// 也可以写 `${ENV:VAR}`。APP 侧存在私有目录里，不外出。
+#[uniffi::export]
+pub fn configure_sync(config_json: String) -> String {
+    call(|a| {
+        let cfg: SyncConfig = match serde_json::from_str(&config_json) {
+            Ok(c) => c,
+            Err(e) => return err(format!("同步配置 JSON 有误: {e}")),
+        };
+        if cfg.targets.is_empty() {
+            return err("至少要有一个同步目标");
+        }
+        if let Err(e) = cfg.to_file(&a.root.join("sync.json")) {
+            return err(e);
+        }
+        let ids: Vec<String> = cfg.targets.iter().map(|t| t.id().to_string()).collect();
+        let device = cfg.device_id.clone();
+        a.engine = Some(Arc::new(SyncEngine::new(a.store.clone(), cfg)));
+        json!({ "ok": true, "device": device, "targets": ids })
+    })
+}
+
 // ---------------------------------------------------------------- 同步与导入导出
 
 #[uniffi::export]
@@ -495,10 +552,96 @@ pub fn upstream_pull() -> String {
             Err(e) => return err(e),
         };
         let _ = save_json(&a.root, &format!("upstream/staging-{}.json", plan.id), &plan);
-        let value = serde_json::to_value(&plan).unwrap_or_else(|_| json!({}));
-        a.plans.insert(plan.id.clone(), plan);
+        let mut value = serde_json::to_value(&plan).unwrap_or_else(|_| json!({}));
+        // 没有冲突 = 全部可自动合并：立刻落库，不留一个"等用户点确认"的空步骤。
+        // 有冲突则一项都不写，等用户在「冲突」页逐项裁决。
+        let no_conflicts = plan.conflicts.is_empty();
+        let plan_id = plan.id.clone();
+        if no_conflicts {
+            match apply_plan(a, &plan, &[]) {
+                Ok(r) => {
+                    if let Some(o) = value.as_object_mut() {
+                        o.insert("applied".into(), r);
+                    }
+                }
+                Err(e) => {
+                    if let Some(o) = value.as_object_mut() {
+                        o.insert("apply_error".into(), json!(e));
+                    }
+                }
+            }
+            a.plans.remove(&plan_id);
+        } else {
+            a.plans.insert(plan_id, plan);
+        }
         value
     })
+}
+
+/// 把计划真正写进库：无冲突项自动合并，冲突项按用户裁决处理。
+/// 只要还有未决冲突就整体失败（一项都不写），避免写一半留下不一致状态。
+fn apply_plan(
+    a: &mut App,
+    plan: &PullPlan,
+    resolutions: &[Resolution],
+) -> std::result::Result<Json, String> {
+    let Some(schema) = schema_of(a) else { return Err("还没有加载领域 schema".into()) };
+    let local = a.store.read(|m| m.entities_vec());
+    let device = a.store.device().to_string();
+    let now = now_ms();
+    let (entities, new_prov, report) = apply_decisions(
+        plan, resolutions, &local, &schema, &a.provenance, &a.topology, &device, now,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let max_rev = a.store.stats().rev;
+    let ops: Vec<Op> = entities
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let mut x = e.clone();
+            x.rev = max_rev + i as u64 + 1;
+            x.updated_at = now;
+            x.device = device.clone();
+            Op::UpsertEntity { entity: x }
+        })
+        .collect();
+    a.store.mutate(&ops).map_err(|e| e.to_string())?;
+
+    a.provenance = new_prov.clone();
+    let _ = save_json(&a.root, "upstream/provenance.json", &new_prov);
+    let _ = save_json(&a.root, "upstream/last-report.json", &report);
+
+    // 决策日志本地留痕 + 尽力推到私有库（GitHub 每次写入都是一个 commit）
+    let entries: Vec<Json> = report.log.iter().map(|e| json!(e)).collect();
+    let log_path = a.root.join("upstream/decisions.jsonl");
+    let mut old = fs::read_to_string(&log_path).unwrap_or_default();
+    for e in &entries {
+        old.push_str(&e.to_string());
+        old.push('\n');
+    }
+    let _ = fs::write(&log_path, old);
+
+    let mut pushed = false;
+    if let Some(engine) = &a.engine {
+        if let Ok(t) = engine.target("github-private") {
+            if runtime().block_on(incremental::append_decisions(&*t, &entries)).is_ok() {
+                pushed = true;
+            }
+        }
+    }
+
+    Ok(json!({
+        "plan_id": plan.id,
+        "auto_applied": report.auto_applied,
+        "conflicts_resolved": report.conflicts_resolved,
+        "added": report.added, "removed": report.removed,
+        "keep_mine": report.keep_mine, "take_upstream": report.take_upstream,
+        "keep_both": report.keep_both,
+        "new_rev": report.new_rev,
+        "decision_log_pushed_to_private": pushed,
+        "log": report.log,
+    }))
 }
 
 #[uniffi::export]
@@ -522,69 +665,18 @@ pub fn upstream_resolve(plan_id: String, decisions_json: String) -> String {
                 custom_value: r["custom_value"].as_str().map(String::from),
             });
         }
-        let Some(schema) = schema_of(a) else { return err("还没有加载领域 schema") };
-        let local = a.store.read(|m| m.entities_vec());
-        let device = a.store.device().to_string();
-        let now = now_ms();
-        let (entities, new_prov, report) = match apply_decisions(
-            &plan, &resolutions, &local, &schema, &a.provenance, &a.topology, &device, now,
-        ) {
-            Ok(x) => x,
-            Err(e) => return err(e), // 未决冲突：一项都不写
-        };
-        let max_rev = a.store.stats().rev;
-        let ops: Vec<Op> = entities
-            .iter()
-            .enumerate()
-            .map(|(i, e)| {
-                let mut x = e.clone();
-                x.rev = max_rev + i as u64 + 1;
-                x.updated_at = now;
-                x.device = device.clone();
-                Op::UpsertEntity { entity: x }
-            })
-            .collect();
-        if let Err(e) = a.store.mutate(&ops) {
-            return err(e);
-        }
-        a.provenance = new_prov.clone();
-        let _ = save_json(&a.root, "upstream/provenance.json", &new_prov);
-        let _ = save_json(&a.root, "upstream/last-report.json", &report);
-
-        // 决策日志本地留痕 + 尽力推到私有库（GitHub 每次写入都是一个 commit）
-        let entries: Vec<Json> = report.log.iter().map(|e| json!(e)).collect();
-        let log_path = a.root.join("upstream/decisions.jsonl");
-        if let Ok(mut old) = fs::read_to_string(&log_path) {
-            for e in &entries {
-                old.push_str(&e.to_string());
-                old.push('\n');
-            }
-            let _ = fs::write(&log_path, old);
-        } else {
-            let mut s = String::new();
-            for e in &entries { s.push_str(&e.to_string()); s.push('\n'); }
-            let _ = fs::write(&log_path, s);
-        }
-        let mut pushed = false;
-        if let Some(engine) = &a.engine {
-            if let Ok(t) = engine.target("github-private") {
-                if runtime().block_on(incremental::append_decisions(&*t, &entries)).is_ok() {
-                    pushed = true;
+        match apply_plan(a, &plan, &resolutions) {
+            Ok(r) => {
+                a.plans.remove(&plan_id);
+                let mut o = r;
+                if let Some(m) = o.as_object_mut() {
+                    m.insert("ok".into(), json!(true));
+                    m.insert("plan_id".into(), json!(plan_id));
                 }
+                o
             }
+            Err(e) => err(e), // 未决冲突：一项都不写
         }
-        a.plans.remove(&plan_id);
-        json!({
-            "ok": true, "plan_id": plan_id,
-            "auto_applied": report.auto_applied,
-            "conflicts_resolved": report.conflicts_resolved,
-            "added": report.added, "removed": report.removed,
-            "keep_mine": report.keep_mine, "take_upstream": report.take_upstream,
-            "keep_both": report.keep_both,
-            "new_rev": report.new_rev,
-            "decision_log_pushed_to_private": pushed,
-            "log": report.log,
-        })
     })
 }
 

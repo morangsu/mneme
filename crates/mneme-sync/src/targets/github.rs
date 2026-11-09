@@ -151,7 +151,13 @@ impl SyncTarget for GitHub {
         let resp = self.auth(self.client.put(&url)).json(&body).send().await?;
         let code = resp.status().as_u16();
         if code == 409 || code == 422 || code == 412 {
-            return Err(Error::PreconditionFailed(format!("GitHub PUT {path} -> {code}")));
+            // 把 GitHub 的原话带出来：422 多数是「文件已存在但没带 sha」，
+            // 只写状态码会让人误以为是并发冲突。
+            let detail = resp.text().await.unwrap_or_default();
+            let detail = detail.chars().take(200).collect::<String>();
+            return Err(Error::PreconditionFailed(format!(
+                "GitHub PUT {path} -> {code} {detail}"
+            )));
         }
         if !resp.status().is_success() {
             return Err(Error::Remote {

@@ -215,6 +215,8 @@ object MnemeBridge {
                 )
                 "upstreamStatus" -> MnemeApi.upstreamStatus()
                 "upstreamAdopt" -> MnemeApi.upstreamAdopt()
+                "setSchema" -> MnemeApi.setSchema(args["toml"] as String)
+                "configureSync" -> MnemeApi.configureSync(args["configJson"] as String)
                 "importData" -> MnemeApi.importData(
                     args["content"] as String,
                     args["filename"] as String,
@@ -285,6 +287,14 @@ object Api {
         call("upstreamResolve", mapOf("planId" to planId, "decisionsJson" to decisionsJson))
 
     suspend fun upstreamStatus(): JSONObject = call("upstreamStatus")
+
+    /** 安装领域包（TOML 原文）。首次启动由 Bundled 清单里用户选择后调用。 */
+    suspend fun setSchema(toml: String): JSONObject =
+        call("setSchema", mapOf("toml" to toml))
+
+    /** 写入 sync.json 并重建同步引擎；configJson 为 SyncConfig 的 JSON。 */
+    suspend fun configureSync(configJson: String): JSONObject =
+        call("configureSync", mapOf("configJson" to configJson))
 
     suspend fun importData(content: String, filename: String, dry: Boolean): JSONObject =
         call("importData", mapOf("content" to content, "filename" to filename, "dry" to dry))

@@ -1,0 +1,142 @@
+# 食疗学：禁忌与用量是安全边界，功效/适宜/方例是可反查线索
+id = "dietetics"
+name = "食疗学"
+version = 1
+description = "功效或适宜人群反推食材；禁忌、用量、用法原样记，绝不合并。"
+
+[[entities]]
+kind = "food"
+label = "食材"
+primary = "name"
+group_kind = "category"
+
+[[entities.fields]]
+key = "name"
+label = "食材"
+kind = "text"
+indexable = true
+required = true
+
+[[entities.fields]]
+key = "category"
+label = "类目"
+kind = "text"
+indexable = true
+
+[[entities.fields]]
+key = "nature"
+label = "性味"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "effects"
+label = "功效"
+kind = "tags"
+indexable = true
+reversible = true
+weight = 2.0
+
+[[entities.fields]]
+key = "suitable"
+label = "适宜"
+kind = "tags"
+indexable = true
+reversible = true
+
+[[entities.fields]]
+key = "avoid"
+label = "禁忌"
+kind = "tags"
+indexable = true
+reversible = true
+immutable = true
+
+[[entities.fields]]
+key = "recipes"
+label = "方例"
+kind = "tags"
+indexable = true
+reversible = true
+
+[[entities.fields]]
+key = "usage"
+label = "用法用量"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "differential"
+label = "相似食材鉴别"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "canonical"
+label = "教材主表述"
+kind = "text"
+
+[[entities.fields]]
+key = "synonyms"
+label = "可替换说法"
+kind = "tags"
+
+[[entities.fields]]
+key = "boundary"
+label = "不可替换边界"
+kind = "text"
+
+[[entities.fields]]
+key = "mastery"
+label = "掌握度"
+kind = "text"
+
+[[entities.directions]]
+id = "effect_to_food"
+label = "功效推食材"
+clue_fields = ["effects", "recipes"]
+answer_fields = ["name", "nature"]
+scope = "category"
+enumerate_if_ambiguous = true
+
+[[entities.directions]]
+id = "suitable_to_food"
+label = "适宜推食材"
+clue_fields = ["suitable"]
+answer_fields = ["name", "avoid"]
+scope = "category"
+enumerate_if_ambiguous = true
+
+[[entities.directions]]
+id = "food_to_chain"
+label = "食材推全链"
+clue_fields = ["name"]
+answer_fields = ["nature", "effects", "suitable", "avoid", "usage"]
+
+[[aliases]]
+concept = "健脾"
+canonical = "健脾益气"
+aliases = ["补脾", "健运脾胃"]
+boundary = "性味、禁忌、用量不可替换"
+
+[[views]]
+id = "matrix"
+label = "类目矩阵"
+columns = ["name", "effects", "suitable"]
+group_by = "category"
+
+[[views]]
+id = "danger"
+label = "安全边界（不合并）"
+columns = ["name", "nature", "avoid", "usage", "differential"]
+
+[[views]]
+id = "synonyms"
+label = "同义表述"
+columns = ["name", "canonical", "synonyms", "boundary"]
+
+[[views]]
+id = "quiz"
+label = "出题视图"
+columns = ["name", "effects"]
+hidden = ["name", "effects", "suitable", "avoid"]

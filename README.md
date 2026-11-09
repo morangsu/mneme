@@ -335,7 +335,7 @@ cd android && JAVA_HOME=D:/scoop/apps/corretto21-jdk/current ./gradlew :app:asse
 |---|---|---|---|
 | [`morangsu/mneme`](https://github.com/morangsu/mneme) | 公开 | 软件本体（Rust 8 crate + Android 工程 + web） | 已推送 |
 | [`morangsu/mneme-data-public`](https://github.com/morangsu/mneme-data-public) | 公开 | 开放基础库：4 个领域包 + 示例数据 + `manifest.json` 校验 | 已推送 |
-| [`morangsu/mneme-data-private`](https://github.com/morangsu/mneme-data-private) | 私有 | 个性化内容 + 各设备同步落点 | 待首次同步写入 |
+| [`morangsu/mneme-data-private`](https://github.com/morangsu/mneme-data-private) | 私有 | 个性化内容 + 各设备同步落点 | 已由真机写入（rev 27） |
 
 **这台机器上 `github.com:443` 被阻断**，`git push/clone` 走不通；但 `api.github.com` 与 `codeload.github.com` 可达。
 因此首推用 `tools/gh-commit.mjs`（Git Data API：blob → tree → commit → ref，一个提交写完所有文件，读的是 git 索引里的 blob，所以 LF 归一化与 `git push` 一致）。
@@ -348,9 +348,49 @@ GH_TOKEN=xxx node tools/gh-commit.mjs . morangsu/mneme "feat: ..."
 
 想恢复原生 `git push`：在 Clash 白名单里加 `github.com`（当前 `MATCH,DIRECT` 兜底，所以 github.com 直连被墙；`api.github.com` 命中 gfw 规则集才走代理）。
 
-## I. 尚未完成
+## I. 手机实测回执（真机 V2445EA / Android 16 / arm64-v8a）
 
-1. **真机安装验证**：APK 已产出（37 MB），设备已连上但 ADB 处于 `unauthorized`，需在手机上点「允许 USB 调试」后 `adb install -r`。
-2. **真实 GitHub 双向同步回执**：私有库读写、412 自愈、决策日志落盘，仍待设备端首次同步实测（本地 LocalDir 后端已跑通等价协议）。
-3. **公共库 → 私有库首次拉取**：`upstream-adopt` 需要在真机上跑一次，确认 provenance 落盘。
+设备：iQOO `V2445EA`，Android 16，`arm64-v8a`，USB 调试直连。
+APK 44.6 MB（含内置领域包与 `libmneme_ffi.so`），`pm install` 成功，冷启动 353 ms。
 
+| 环节 | 实测结果 |
+| --- | --- |
+| FFI 加载 | 真实 uniffi 绑定生效（未回退 Stub），16 → 19 个导出方法 |
+| 首次建库 | 界面列出内置 4 个领域包 → 选「中药学」→ **实体 6 / 卡片 77 / rev 6** |
+| 矩阵 | 按药群分组，列 `药名/功效/特点锚/应用`，immutable 列标「原样」 |
+| AND 反查 | 线索 `功效:宣肺平喘` + `禁忌:表虚自汗` → **命中 1 项 · 麻黄 · 匹配 3.0** |
+| 复习 | 到期 0 / 本轮 5 张，出题来自真实数据（「具有『疏肝行气』的是？」） |
+| 首次上行 | `backend=github / bytes_up=32022 / conflicts=0 / retries=0`，私有库 rev 7 |
+| 公共库拉取 r1 | `上游 r0 → r1：自动合并 0 / 新增 0 / 待裁决 0`（本地与公共一致） |
+| 公共库拉取 r2 | `上游 r0 → r2：新增 1 / 待裁决 0` → 无需裁决，**直接落库**，矩阵出现「生姜」，实体 7 / 卡片 89 |
+| 增量上行 | rev 7 → 27，事件分片 9700 B → 15550 B，新增 `deltas/delta-7-27.json`（旧 delta 保留） |
+
+远端结构（私有库 `data/`）：`manifest.json` / `latest.json` / `events/<device>.jsonl` / `snapshots/snap-*.{json,gz}` / `deltas/delta-<from>-<to>.json` / `sync/log.jsonl`。
+
+### 这轮实测抓到的两个真 bug
+
+1. **`github.com:443` 走不通时首推没路**：本机 `git push` 被阻断（`api.github.com` 通）。补了 `tools/gh-commit.mjs` —— 用 Git Data API（blob → tree → commit → ref）一次提交写完所有文件，**读的是 git 索引里的 blob**，所以 LF 归一化、可执行位与 `git push` 完全一致。
+2. **事件分片第二次上传必 422**：`events/<device>.jsonl` 是**可变文件**，原来用无条件 PUT，文件已存在时 GitHub 要求带 `sha`，返回 422 且拿不到 412 自愈。改为先 `head()` 取 sha 再条件写，412 自愈随之生效。同时把 409/412/422 的响应体带进错误信息——只写状态码会让人误判成并发冲突。
+
+## J. 三仓库用法速查
+
+```bash
+# 公共库克隆成 domains/（github.com 的 git 传输若被阻断，用 API 取 tarball）
+git clone https://github.com/morangsu/mneme-data-public domains
+
+# 本项目推送（github.com 不可达时）
+GH_TOKEN=xxx node tools/gh-commit.mjs . morangsu/mneme "feat: ..."
+
+# 手机端：同步页填 token / owner / repo（默认 morangsu/mneme-data-private，路径 data）
+#        → 「保存并启用」写 sync.json 并重建引擎 → 「立即同步」
+android\sync-assets.cmd     # 把 domains/ 的领域包同步进 APK assets（改完数据再打包前跑）
+```
+
+**公开库是只读上游**：App 里「拉取公共基础库」只读、不写；无冲突时 Rust 侧直接落库（不留空确认步骤），有冲突则一项都不写、跳到「冲突」页逐项裁决。公开库读取复用私有库 token（手机上没有环境变量，匿名 60/h 且部分网络会被掐断）。
+
+## K. 尚未完成
+
+1. **冲突裁决的真机回执**：冲突判定逻辑已有桌面端实测（1 项待裁决、`personalized=true`、三值并列、未决拒绝提交），但**手机端界面**还没跑过一次真实冲突 —— 需要一个「本地改过、上游也改」的场景；当前 App 没有编辑入口，只能靠导入改过的 CSV 制造。
+2. **编辑能力**：矩阵目前只读；改字段要走导入，后续补单元格编辑 + `immutable` 字段的「不可改，需新建」提示。
+3. **`mneme-data-private` 首次 `upstream-adopt`**：provenance 仍是 0，意味着还没有「个性化字段」的基线；等有编辑能力后再跑一次才有意义。
+4. **桌面 CLI 的 release 二进制未刷新**：仓库里已含 422 修复源码，但本机 `target/release/mneme.exe` 还是修复前的。

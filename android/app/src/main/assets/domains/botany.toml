@@ -1,0 +1,136 @@
+# 植物学：科属/拉丁学名是硬事实，形态/分布/用途是可反查线索
+id = "botany"
+name = "植物学"
+version = 1
+description = "形态、分布、用途任一线索反推种名；拉丁名与鉴别点原样记。"
+
+[[entities]]
+kind = "species"
+label = "物种"
+primary = "name"
+group_kind = "family"
+
+[[entities.fields]]
+key = "name"
+label = "种名"
+kind = "text"
+indexable = true
+required = true
+
+[[entities.fields]]
+key = "family"
+label = "科属"
+kind = "text"
+indexable = true
+immutable = true
+
+[[entities.fields]]
+key = "latin"
+label = "拉丁学名"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "morphology"
+label = "形态特征"
+kind = "tags"
+indexable = true
+reversible = true
+weight = 2.0
+
+[[entities.fields]]
+key = "distribution"
+label = "分布"
+kind = "tags"
+indexable = true
+reversible = true
+
+[[entities.fields]]
+key = "uses"
+label = "用途"
+kind = "tags"
+indexable = true
+reversible = true
+
+[[entities.fields]]
+key = "habitat"
+label = "生境"
+kind = "tags"
+indexable = true
+reversible = true
+
+[[entities.fields]]
+key = "identification"
+label = "相似种鉴别"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "canonical"
+label = "教材主表述"
+kind = "text"
+
+[[entities.fields]]
+key = "synonyms"
+label = "可替换说法"
+kind = "tags"
+
+[[entities.fields]]
+key = "boundary"
+label = "不可替换边界"
+kind = "text"
+
+[[entities.fields]]
+key = "mastery"
+label = "掌握度"
+kind = "text"
+
+[[entities.directions]]
+id = "morphology_to_name"
+label = "形态推种名"
+clue_fields = ["morphology", "habitat"]
+answer_fields = ["name", "family"]
+scope = "family"
+enumerate_if_ambiguous = true
+
+[[entities.directions]]
+id = "uses_to_name"
+label = "用途推种名"
+clue_fields = ["uses"]
+answer_fields = ["name"]
+scope = "family"
+enumerate_if_ambiguous = true
+
+[[entities.directions]]
+id = "name_to_chain"
+label = "种名推全链"
+clue_fields = ["name"]
+answer_fields = ["family", "latin", "morphology", "uses"]
+
+[[aliases]]
+concept = "菊科"
+canonical = "菊科 Asteraceae"
+aliases = ["Asteraceae", "Compositae"]
+boundary = "科名可替换，拉丁学名须逐字核对"
+
+[[views]]
+id = "matrix"
+label = "科属矩阵"
+columns = ["name", "morphology", "uses"]
+group_by = "family"
+
+[[views]]
+id = "danger"
+label = "硬事实区（不合并）"
+columns = ["name", "latin", "family", "identification", "boundary"]
+
+[[views]]
+id = "synonyms"
+label = "同义表述"
+columns = ["name", "canonical", "synonyms", "boundary"]
+
+[[views]]
+id = "quiz"
+label = "出题视图"
+columns = ["name", "morphology"]
+hidden = ["name", "morphology", "uses"]

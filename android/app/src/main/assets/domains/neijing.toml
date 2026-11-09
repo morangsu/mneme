@@ -1,0 +1,128 @@
+# 黄帝内经：原文与注家是「危险区」，篇名/主题是可反查的线索
+id = "neijing"
+name = "内经"
+version = 1
+description = "以篇章为基座，原文→篇名、主题→篇名、篇名→释义的反向提取。"
+
+[[entities]]
+kind = "chapter"
+label = "篇章"
+primary = "title"
+group_kind = "category"
+
+[[entities.fields]]
+key = "title"
+label = "篇名"
+kind = "text"
+indexable = true
+required = true
+
+[[entities.fields]]
+key = "category"
+label = "类别"
+kind = "text"
+indexable = true
+
+[[entities.fields]]
+key = "text"
+label = "原文"
+kind = "text"
+indexable = true
+reversible = true
+immutable = true
+weight = 2.0
+
+[[entities.fields]]
+key = "gloss"
+label = "释义"
+kind = "text"
+
+[[entities.fields]]
+key = "commentators"
+label = "注家"
+kind = "tags"
+indexable = true
+reversible = true
+
+[[entities.fields]]
+key = "themes"
+label = "主题"
+kind = "tags"
+indexable = true
+reversible = true
+
+[[entities.fields]]
+key = "source"
+label = "出处"
+kind = "text"
+immutable = true
+
+[[entities.fields]]
+key = "canonical"
+label = "教材主表述"
+kind = "text"
+
+[[entities.fields]]
+key = "synonyms"
+label = "可替换说法"
+kind = "tags"
+
+[[entities.fields]]
+key = "boundary"
+label = "不可替换边界"
+kind = "text"
+
+[[entities.fields]]
+key = "mastery"
+label = "掌握度"
+kind = "text"
+
+[[entities.directions]]
+id = "text_to_title"
+label = "原文推篇名"
+clue_fields = ["text"]
+answer_fields = ["title", "gloss"]
+scope = "category"
+enumerate_if_ambiguous = true
+
+[[entities.directions]]
+id = "theme_to_title"
+label = "主题推篇名"
+clue_fields = ["themes", "commentators"]
+answer_fields = ["title", "text"]
+scope = "category"
+enumerate_if_ambiguous = true
+
+[[entities.directions]]
+id = "title_to_chain"
+label = "篇名推全链"
+clue_fields = ["title"]
+answer_fields = ["text", "gloss", "themes"]
+
+[[aliases]]
+concept = "素问"
+canonical = "黄帝内经素问"
+aliases = ["素问", "内经素问"]
+boundary = "篇名与卷次不可替换"
+
+[[views]]
+id = "matrix"
+label = "篇章矩阵"
+columns = ["title", "themes", "commentators"]
+group_by = "category"
+
+[[views]]
+id = "danger"
+label = "原文区（不合并）"
+columns = ["title", "text", "source", "boundary"]
+
+[[views]]
+id = "synonyms"
+label = "同义表述"
+columns = ["title", "canonical", "synonyms", "boundary"]
+
+[[views]]
+id = "quiz"
+label = "出题视图"
+columns = ["title", "themes"]
+hidden = ["title", "text", "gloss"]

@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "note": "内置领域包清单。首次启动时由 APP 读取，供用户选择；对应 .toml 与可选示例数据都在本目录。",
+  "domains": [
+    {
+      "id": "materia-medica",
+      "name": "中药学",
+      "toml": "materia-medica.toml",
+      "sample": "materia-medica.csv",
+      "sample_label": "示例 6 味药"
+    },
+    {
+      "id": "neijing",
+      "name": "内经",
+      "toml": "neijing.toml"
+    },
+    {
+      "id": "botany",
+      "name": "植物学",
+      "toml": "botany.toml"
+    },
+    {
+      "id": "dietetics",
+      "name": "食疗学",
+      "toml": "dietetics.toml"
+    }
+  ]
+}
