@@ -21,3 +21,4 @@ hex.workspace = true
 thiserror.workspace = true
 parking_lot.workspace = true
 chrono.workspace = true
+fs2 = "0.4.3"

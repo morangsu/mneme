@@ -272,3 +272,21 @@ fn opening_without_cards_does_not_wipe_mirror_cards() {
         "不装卡时同步镜像不能删掉 cards"
     );
 }
+
+#[test]
+fn second_process_cannot_open_same_dir() {
+    // 托盘常驻后桌面进程长期活着：第二个实例必须被文件锁挡住，
+    // 而不是带着并发写继续跑（事件日志和 SQLite 都不支持多进程同写）。
+    let dir = tmp("lock");
+    seed(&dir);
+    let _first = Store::open_timed(&dir, "t").unwrap();
+    let second = Store::open_timed(&dir, "t2");
+    let err = second.err().expect("第二个实例应当打开失败");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("已被另一个 mneme 进程占用"),
+        "错误要能被用户读懂：{msg}"
+    );
+    // 锁文件不应出现在同步/导出里造成困扰——它是无内容的隐藏哨兵，只由锁管理
+    assert!(dir.join(".lock").exists());
+}

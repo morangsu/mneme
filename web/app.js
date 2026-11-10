@@ -1,10 +1,14 @@
 const $ = (id) => document.getElementById(id);
-const TOKEN = new URLSearchParams(location.search).get('token') || '';
 let currentCard = null;
+
+// 登录态在 HttpOnly 会话 cookie 里（/api/login 签发），JS 不碰 token 本体——
+// localStorage 里存 token 等于给 XSS 留一把长期钥匙。
+// 例外：URL 带 ?token= 时仍向后传（桌面壳与脚本调试用这个通道）。
+const URL_TOKEN = new URLSearchParams(location.search).get('token') || '';
 
 function authHeaders(extra) {
   const h = Object.assign({}, extra || {});
-  if (TOKEN) h['Authorization'] = 'Bearer ' + TOKEN;
+  if (URL_TOKEN) h['Authorization'] = 'Bearer ' + URL_TOKEN;
   return h;
 }
 
@@ -14,6 +18,44 @@ async function api(path, opt = {}) {
   const t = await r.text();
   try { return JSON.parse(t); } catch { return { error: t }; }
 }
+
+// 401 = 没登录或会话过期：弹登录框，登成功刷新整页
+async function apiAuthed(path, opt = {}) {
+  const r = await api(path, opt);
+  if (r.error && /需要登录|401/i.test(r.error)) { showLogin(); }
+  return r;
+}
+
+function showLogin() {
+  if ($('login-mask')) return;
+  const mask = document.createElement('div');
+  mask.id = 'login-mask';
+  mask.style.cssText =
+    'position:fixed;inset:0;background:rgba(10,11,13,.82);display:flex;' +
+    'align-items:center;justify-content:center;z-index:99';
+  mask.innerHTML = `
+    <form id="login-form" style="background:#1e2024;padding:24px;border-radius:12px;width:min(92vw,360px);display:flex;flex-direction:column;gap:12px">
+      <b style="font-size:16px">mneme 登录</b>
+      <span class="muted">输入访问口令（同一次输入保持 12 小时）</span>
+      <input type="password" id="login-token" autocomplete="current-password"
+             style="padding:10px;border-radius:8px;border:1px solid #3a3d44;background:#16171a;color:#e6e7ea" />
+      <div id="login-err" class="muted" style="color:#e5484d"></div>
+      <button type="submit" style="padding:10px;border-radius:8px;border:none;background:#6aa9ff;color:#16171a;font-weight:600">登录</button>
+    </form>`;
+  document.body.appendChild(mask);
+  $('login-token').focus();
+  $('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const r = await api('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: $('login-token').value }),
+    });
+    if (r.error) { $('login-err').textContent = r.error; return; }
+    mask.remove();
+    location.reload();
+  });
+}
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
 function banner(msg, kind = 'warn') {
@@ -22,7 +64,11 @@ function banner(msg, kind = 'warn') {
 
 async function boot() {
   const s = await api('/api/state');
-  if (s.error) { banner(s.error, 'bad'); return; }
+  if (s.error) {
+    if (/需要登录|401/i.test(s.error)) { showLogin(); }
+    else banner(s.error, 'bad');
+    return;
+  }
   $('state').textContent = `${s.schema || '未加载领域'} · ${s.entities} 条 · ${s.cards} 张卡 · ${s.device}`;
   const v = await api('/api/views');
   $('view').innerHTML = (v.views || []).map(x => `<option value="${esc(x.id)}">${esc(x.label || x.id)}</option>`).join('');

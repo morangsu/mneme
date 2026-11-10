@@ -12,6 +12,7 @@
 //! 算好再整体换入，写临界区只做「追加日志 + 更新 BTreeMap」。
 
 pub mod cardcache;
+pub mod entities;
 mod error;
 mod eventlog;
 mod history;
@@ -78,6 +79,10 @@ pub struct Stats {
 
 pub struct Store {
     root: PathBuf,
+    /// 数据目录独占锁。事件日志与 SQLite 镜像都不支持多进程同写，
+    /// 托盘常驻后桌面进程生命周期变长，第二个进程必须被挡在门外而不是悄悄并发。
+    /// 句柄存在这里 = 锁随进程存活，进程退出自动释放（含崩溃）。
+    _dir_lock: Option<std::fs::File>,
     /// 卡片装载闸门。懒加载必须只装一次：FFI 与 server 可能并发进来，
     /// 没有这道锁就会把 34k 张卡装两遍（白花 80 ms，还浪费一份内存）。
     cards_gate: parking_lot::Mutex<()>,
@@ -105,6 +110,9 @@ impl Store {
         let mut t = OpenTimings::default();
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root)?;
+        // 独占锁放在最前面：抢不到就拒绝打开，绝不能带着并发写继续跑。
+        // 锁文件本身无内容，锁的是文件的字节区间，进程退出即释放。
+        let dir_lock = lock_dir(&root)?;
         let log = EventLog::open(&root, device)?;
         let snaps = SnapshotStore::open(&root)?;
 
@@ -132,6 +140,7 @@ impl Store {
         )?));
         let store = Arc::new(Self {
             root,
+            _dir_lock: dir_lock,
             cards_gate: parking_lot::Mutex::new(()),
             device: sanitize(device),
             log,
@@ -476,6 +485,29 @@ impl Store {
     }
 }
 
+/// 给数据目录上一把进程级独占锁。
+///
+/// 用 OS 字节区间锁而不是「写 PID 文件再检查」：后者在崩溃后留下死文件、
+/// 两个进程的检查之间有竞态，都不可靠。锁失败返回明确错误，
+/// 由各端把「数据目录被占用」讲给用户听。
+fn lock_dir(root: &Path) -> Result<Option<std::fs::File>> {
+    let path = root.join(".lock");
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)?;
+    use fs2::FileExt;
+    match f.try_lock_exclusive() {
+        Ok(()) => Ok(Some(f)),
+        Err(_) => Err(Error::Invalid(format!(
+            "数据目录 {} 已被另一个 mneme 进程占用（托盘里可能有常驻实例）",
+            root.display()
+        ))),
+    }
+}
+
+#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::*;

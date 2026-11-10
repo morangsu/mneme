@@ -52,6 +52,7 @@ async function selectView(i) {
   $('q').value = '';
   document.querySelectorAll('.view-item').forEach((el, k) =>
     el.classList.toggle('on', k === i));
+  refreshCreate();
   if (!S.viewId) return;
   S.view = await api('/api/view/' + encodeURIComponent(S.viewId));
   if (S.view.error) { $('list').innerHTML = `<div class="empty">${esc(S.view.error)}</div>`; return; }
@@ -161,15 +162,45 @@ async function showDetail() {
       </div>`).join('')}
     <div class="edit-bar">
       <button id="save">保存 <span class="muted">Ctrl+Enter</span></button>
-      <span id="save-note"></span>
-    </div>`;
+      <button id="undo" class="ghost">撤销上次编辑</button>
+      <span class="spacer"></span>
+      <button id="del" class="danger">删除</button>
+    </div>
+    <div class="muted" id="life-note"></div>`;
   $('save').addEventListener('click', saveEdit);
+  $('del').addEventListener('click', () => lifeAction('delete'));
+  $('undo').addEventListener('click', () => lifeAction('undo'));
   $('detail').querySelectorAll('.fin').forEach((t) => {
     t.dataset.orig = t.value;
     t.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(); }
     });
   });
+}
+
+async function lifeAction(kind) {
+  const it = S.items[S.sel];
+  if (!it) return;
+  const note = $('life-note');
+  const label = kind === 'delete' ? '确认删除？删除后进回收站，可恢复' : '';
+  if (kind === 'delete' && !confirm(label)) return;
+  note.textContent = kind === 'delete' ? '删除中…' : '撤销中…';
+  const r = await api('/api/' + kind, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: it.id }),
+  });
+  if (r.error) { note.textContent = r.error; return; }
+  if (kind === 'delete') {
+    note.textContent = '已删除（回收站里可用 /api/restore 恢复）';
+    $('detail').innerHTML = '<div class="empty">已删除</div>';
+    if (S.mode === 'view' && S.viewId) { await selectView(S.views.findIndex((v) => v.id === S.viewId)); }
+  } else {
+    note.textContent = `已撤销，恢复 ${(r.restored || []).length} 个字段（rev ${r.rev}）`;
+    showDetail();
+  }
+  const st = await api('/api/state');
+  if (!st.error) $('state').textContent = ` · ${st.schema || '未加载领域'} · ${st.entities} 条 · ${st.cards} 张卡 · rev ${st.rev}`;
 }
 
 async function saveEdit() {
@@ -191,7 +222,7 @@ async function saveEdit() {
   });
   if (r.error) { note.textContent = ''; note.innerHTML = `<span class="err">${esc(r.error)}</span>`; return; }
   if (r.noop) { note.textContent = '没有实际变化'; return; }
-  note.textContent = `已保存 rev ${r.rev}（${(r.changed || []).length} 个字段）`;
+  note.textContent = `已保存 rev ${r.rev}（${(r.changed || []).length} 个字段）；此时「撤销上次编辑」可用`;
   // 刷新详情与列表：列表里的值可能已过期
   const sel = S.sel;
   if (S.mode === 'view' && S.viewId) {
@@ -252,4 +283,68 @@ $('q').addEventListener('input', () => {
   debounce = setTimeout(doSearch, 200);
 });
 
+$('create').addEventListener('click', openCreate);
+
 boot();
+
+// ---- 新建 --------------------------------------------------------------
+async function refreshCreate() {
+  const t = await api('/api/template');
+  if (!t.error) {
+    const btn = $('create');
+    if (btn) btn.textContent = `＋ 新建${t.kinds.length > 1 ? '（' + t.kind + '）' : ''}`;
+  }
+}
+
+async function openCreate() {
+  if ($('create-mask')) return;
+  const t = await api('/api/template');
+  if (t.error) { alert(t.error); return; }
+  const mask = document.createElement('div');
+  mask.id = 'create-mask';
+  mask.style.cssText =
+    'position:fixed;inset:0;background:rgba(10,11,13,.7);display:flex;' +
+    'align-items:center;justify-content:center;z-index:50';
+  mask.innerHTML = `
+    <form id="create-form" style="background:var(--panel);padding:20px;border-radius:12px;width:min(92vw,460px);max-height:86vh;overflow:auto;display:flex;flex-direction:column;gap:10px">
+      <b>新建${t.kinds.length > 1 ? '（' + esc(t.kind) + '）' : ''}</b>
+      ${t.fields.filter((f) => !f.immutable || f.key === t.primary).map((f) => `
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:12px">
+          ${esc(f.label || f.key)}${f.required ? '<span class="muted">（必填）</span>' : ''}
+          <input class="cfin" data-key="${esc(f.key)}" autocomplete="off"
+                 style="padding:7px 9px;border-radius:6px;border:1px solid var(--divider);background:var(--panel-alt);color:var(--text)" />
+        </label>`).join('')}
+      <div id="create-err" style="color:#e5484d;font-size:12px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" id="create-cancel" class="ghost">取消</button>
+        <button type="submit" id="create-ok">创建</button>
+      </div>
+    </form>`;
+  document.body.appendChild(mask);
+  $('create-cancel').addEventListener('click', () => mask.remove());
+  $('create-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fields = {};
+    mask.querySelectorAll('.cfin').forEach((inp) => {
+      if (inp.value.trim()) fields[inp.dataset.key] = inp.value;
+    });
+    const r = await api('/api/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: t.kind, fields, id_hint: '' }),
+    });
+    if (r.error) {
+      $('create-err').textContent = r.error +
+        (r.deleted ? '（在回收站里，可恢复或换个名字）' : '');
+      return;
+    }
+    mask.remove();
+    if (S.mode === 'view' && S.viewId) {
+      await selectView(S.views.findIndex((v) => v.id === S.viewId));
+    }
+    // 建完直接打开它的详情，顺手确认一眼
+    const idx = S.items.findIndex((x) => x.id === r.id);
+    if (idx >= 0) { S.sel = idx; syncSelection(); }
+    showDetail();
+  });
+}

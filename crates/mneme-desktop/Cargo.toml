@@ -11,5 +11,6 @@ mneme-store.workspace = true
 mneme-sync.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
+tray-icon = "0.26"
 wry = "0.57.1"
 tao = "0.37.2"

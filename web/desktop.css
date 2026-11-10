@@ -116,3 +116,19 @@ main {
 #save:hover { filter: brightness(1.1); }
 #save-note { font-size: 12px; color: var(--dim); }
 #save-note .err { color: #e5484d; }
+
+#save, .ghost, .danger, #create-ok, #create-cancel {
+  border: none; border-radius: 6px;
+  padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.ghost, #create-cancel {
+  background: var(--panel-alt); color: var(--text);
+  border: 1px solid var(--divider);
+}
+.danger { background: transparent; color: #e5484d; border: 1px solid #e5484d55; }
+.danger:hover { background: #e5484d22; }
+.spacer { flex: 1; }
+#del, #undo { background: var(--panel-alt); color: var(--dim); border: 1px solid var(--divider); }
+#del:hover { color: #e5484d; border-color: #e5484d55; }
+#undo:hover { color: var(--text); }
+#life-note { margin-top: 6px; }

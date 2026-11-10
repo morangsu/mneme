@@ -52,6 +52,9 @@ pub struct AppState {
     pub engine: Option<Arc<SyncEngine>>,
     pub token: Option<String>,
     pub upstream: Arc<StdMutex<UpstreamState>>,
+    /// 已登录的浏览器会话（session_id -> 过期毫秒）。只在内存里，重启即全体失效；
+    /// 手机浏览器存 HttpOnly cookie，不再碰 localStorage。
+    pub sessions: Arc<StdMutex<std::collections::HashMap<String, i64>>>,
 }
 
 fn load_topology(root: &FsPath) -> Topology {
@@ -96,6 +99,7 @@ impl AppState {
             store,
             engine,
             token,
+            sessions: Arc::new(StdMutex::new(std::collections::HashMap::new())),
             upstream: Arc::new(StdMutex::new(UpstreamState {
                 root,
                 topology,
@@ -138,9 +142,16 @@ pub fn router(state: AppState) -> Router {
         .route("/desktop.js", get(|| async { js_body(DESKTOP_JS) }))
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/entity/{id}", get(api_entity))
+        .route("/api/template", get(api_template))
         .route("/api/search", get(api_search))
         .route("/api/edit", post(api_edit))
         .route("/api/group", post(api_set_group))
+        .route("/api/create", post(api_create))
+        .route("/api/delete", post(api_delete))
+        .route("/api/restore", post(api_restore))
+        .route("/api/undo", post(api_undo))
+        .route("/api/login", post(api_login))
+        .route("/api/logout", post(api_logout))
         .nest("/api", api)
         .with_state(state)
 }
@@ -171,10 +182,17 @@ pub async fn serve(state: AppState, port: u16, lan: bool) -> anyhow::Result<()> 
 }
 
 /// 只在 /api 上校验口令；静态页本身可读，但拿不到任何数据。
+/// 静态页不含任何数据，公开；真正要保护的是 /api/*。
+/// 公开它们还有一个原因：未登录时浏览器要能加载 JS，由 JS 弹登录框。
+const PUBLIC_PATHS: [&str; 6] = ["/", "/app.css", "/app.js", "/desktop", "/desktop.css", "/desktop.js"];
+
 async fn auth(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let Some(t) = &state.token else {
         return next.run(req).await;
     };
+    if req.method() == axum::http::Method::GET && PUBLIC_PATHS.contains(&req.uri().path()) {
+        return next.run(req).await;
+    }
     let header_ok = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -184,11 +202,109 @@ async fn auth(State(state): State<AppState>, req: Request, next: Next) -> Respon
         .uri()
         .query()
         .is_some_and(|q| q.split('&').any(|p| p == format!("token={t}")));
-    if header_ok || query_ok {
+    if header_ok || query_ok || session_ok(&state, &req) {
         next.run(req).await
     } else {
-        (StatusCode::UNAUTHORIZED, "需要口令：在 URL 加 ?token=xxx").into_response()
+        (StatusCode::UNAUTHORIZED, "需要登录").into_response()
     }
+}
+
+/// 会话 cookie 名。HttpOnly：JS 读不到，XSS 偷不走。
+pub const SESSION_COOKIE: &str = "mneme_session";
+/// 12 小时；过期后浏览器带上的会话一律无效，要重新输 token。
+const SESSION_TTL_MS: i64 = 12 * 3600 * 1000;
+
+fn session_ok(state: &AppState, req: &Request) -> bool {
+    let Some(sid) = req
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| {
+            c.split(';').find_map(|p| {
+                let p = p.trim();
+                p.strip_prefix(SESSION_COOKIE).and_then(|rest| {
+                    rest.strip_prefix('=').map(|v| v.trim().to_string())
+                })
+            })
+        })
+    else {
+        return false;
+    };
+    let now = now_ms();
+    let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    // 顺手清过期：会话表最多几百条（每台设备一个），不值得定时器
+    sessions.retain(|_, exp| *exp > now);
+    match sessions.get(&sid) {
+        Some(exp) if *exp > now => true,
+        _ => {
+            sessions.remove(&sid);
+            false
+        }
+    }
+}
+
+/// 登录：token 对上就发 HttpOnly 会话 cookie。
+/// 每次登录都换新 session id——同一个人在两台浏览器登录互不影响，登出一台不害另一台。
+async fn api_login(State(s): State<AppState>, Json(b): Json<LoginBody>) -> Response {
+    let Some(t) = &s.token else {
+        return Json(json!({ "error": "这个实例没有设置口令，无需登录" })).into_response();
+    };
+    if b.token.trim() != *t {
+        return Json(json!({ "error": "口令不对" })).into_response();
+    }
+    let now = now_ms();
+    let sid = {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for v in [
+            now as u64,
+            std::process::id() as u64,
+            (&h as *const u64) as u64,
+        ] {
+            for byte in v.to_le_bytes() {
+                h ^= byte as u64;
+                h = h.wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        format!("{h:032x}")
+    };
+    {
+        let mut sessions = s.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        sessions.retain(|_, exp| *exp > now);
+        sessions.insert(sid.clone(), now + SESSION_TTL_MS);
+    }
+    let cookie = format!(
+        "{SESSION_COOKIE}={sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
+        SESSION_TTL_MS / 1000
+    );
+    (
+        [(header::SET_COOKIE, cookie)],
+        Json(json!({ "ok": true, "expires_hours": SESSION_TTL_MS / 3600_000 })),
+    )
+        .into_response()
+}
+
+async fn api_logout(State(s): State<AppState>, req: Request) -> Response {
+    if let Some(sid) = req
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| {
+            c.split(';').find_map(|p| {
+                let p = p.trim();
+                p.strip_prefix(SESSION_COOKIE)
+                    .and_then(|rest| rest.strip_prefix('=').map(|v| v.trim().to_string()))
+            })
+        })
+    {
+        s.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&sid);
+    }
+    let cookie = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+    ([(header::SET_COOKIE, cookie)], Json(json!({ "ok": true }))).into_response()
+}
+
+#[derive(Deserialize)]
+struct LoginBody {
+    token: String,
 }
 
 fn css_body(s: &'static str) -> impl IntoResponse {
@@ -211,6 +327,51 @@ async fn api_entity(State(s): State<AppState>, Path(id): Path<String>) -> Json<J
         return Json(json!({ "error": format!("实体不存在或已删除：{id}") }));
     };
     Json(mneme_core::entity::detail_view(&schema, &e, &groups))
+}
+
+/// 新建表单的字段形状（kind 省略 = 第一个实体类型）。
+/// 与 FFI 的 entityTemplate 同源：都用 schema 定义，不硬编码。
+async fn api_template(
+    State(s): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Json<JsonValue> {
+    let Some(schema) = s.store.read(|m| m.schema.clone()) else {
+        return Json(json!({ "error": "还没有加载领域 schema" }));
+    };
+    let kinds: Vec<String> = schema.entities.iter().map(|e| e.kind.clone()).collect();
+    let kind = match q.get("kind").filter(|k| !k.is_empty()) {
+        Some(k) if kinds.iter().any(|x| x == k) => k.clone(),
+        _ => kinds.first().cloned().unwrap_or_default(),
+    };
+    let Some(def) = schema.entity_def(&kind) else {
+        return Json(json!({ "error": format!("未知实体类型：{kind}") }));
+    };
+    let fields: Vec<JsonValue> = def
+        .fields
+        .iter()
+        .map(|f| {
+            json!({
+                "key": f.key,
+                "label": if f.label.is_empty() { f.key.clone() } else { f.label.clone() },
+                "kind": match f.kind {
+                    mneme_core::FieldKind::Text => "text",
+                    mneme_core::FieldKind::Tag => "tag",
+                    mneme_core::FieldKind::Tags => "tags",
+                    mneme_core::FieldKind::Number => "number",
+                    mneme_core::FieldKind::Bool => "bool",
+                },
+                "immutable": f.immutable,
+                "required": f.required,
+                "value": "",
+            })
+        })
+        .collect();
+    Json(json!({
+        "kind": kind,
+        "kinds": kinds,
+        "primary": def.primary.clone().unwrap_or_else(|| "name".into()),
+        "fields": fields,
+    }))
 }
 
 /// 编辑实体：与 FFI 的 `editEntity` 共用 core 的 `apply_edit`（两端口径不分叉）。
@@ -296,6 +457,63 @@ async fn api_set_group(State(s): State<AppState>, Json(b): Json<SetGroupBody>) -
         Ok(_) => Json(json!({ "ok": true, "id": b.id, "group_id": gid, "group_name": label })),
         Err(err) => Json(json!({ "error": err.to_string() })),
     }
+}
+
+/// 新建实体：与 FFI `createEntity` 同一份 store 实现（重名分类、替代链、原子写）。
+async fn api_create(State(s): State<AppState>, Json(b): Json<CreateBody>) -> Json<JsonValue> {
+    if b.fields.is_empty() {
+        return Json(json!({ "error": "没有要写入的字段" }));
+    }
+    let Some(schema) = s.store.read(|m| m.schema.clone()) else {
+        return Json(json!({ "error": "还没有加载领域 schema" }));
+    };
+    match mneme_store::entities::create_one(&s.store, &schema, &b.kind, &b.fields, &b.id_hint) {
+        Ok(c) => Json(json!({
+            "ok": true, "id": c.id, "rev": c.rev, "name": c.name,
+            "superseded": c.superseded,
+        })),
+        Err(mneme_store::entities::CreateErr::Duplicate { message, id, deleted }) => {
+            Json(json!({ "error": message, "existing_id": id, "deleted": deleted }))
+        }
+        Err(mneme_store::entities::CreateErr::Other(e)) => Json(json!({ "error": e })),
+    }
+}
+
+/// 删除（显式墓碑，进回收站）。
+async fn api_delete(State(s): State<AppState>, Json(b): Json<IdBody>) -> Json<JsonValue> {
+    match mneme_store::entities::delete_entity(&s.store, &b.id) {
+        Ok(deleted_at) => Json(json!({ "ok": true, "id": b.id, "deleted_at": deleted_at })),
+        Err(e) => Json(json!({ "error": e })),
+    }
+}
+
+/// 从回收站恢复。
+async fn api_restore(State(s): State<AppState>, Json(b): Json<IdBody>) -> Json<JsonValue> {
+    match mneme_store::entities::restore_entity(&s.store, &b.id) {
+        Ok(rev) => Json(json!({ "ok": true, "id": b.id, "rev": rev })),
+        Err(e) => Json(json!({ "error": e })),
+    }
+}
+
+/// 撤销本会话对这条实体的最近一次编辑（字段级回滚，与 FFI undoEdit 同源）。
+async fn api_undo(State(s): State<AppState>, Json(b): Json<IdBody>) -> Json<JsonValue> {
+    match s.store.undo_entity(&b.id, now_ms()) {
+        Ok((rev, restored)) => Json(json!({ "ok": true, "id": b.id, "rev": rev, "restored": restored })),
+        Err(e) => Json(json!({ "error": e.to_string() })),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateBody {
+    kind: String,
+    fields: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    id_hint: String,
+}
+
+#[derive(Deserialize)]
+struct IdBody {
+    id: String,
 }
 
 #[derive(Deserialize)]

@@ -112,6 +112,25 @@ fn run() -> anyhow::Result<()> {
         t0.elapsed().as_secs_f64() * 1000.0
     );
 
+    // 4) 托盘：关窗=隐藏（进程和数据都活着），点托盘或菜单「显示」唤起。
+    //     第二次打开因此是瞬时的——WebView、库、server 全部还在。
+    let tray = build_tray();
+    let (menu_tx, menu_rx) = std::sync::mpsc::channel::<TrayAction>();
+    tray_icon::TrayIconEvent::set_event_handler(Some(move |e| {
+        // 左键点图标本体 = 显示窗口
+        if matches!(e, tray_icon::TrayIconEvent::Click { button: tray_icon::MouseButton::Left, button_state: tray_icon::MouseButtonState::Up, .. }) {
+            let _ = menu_tx.send(TrayAction::Show);
+        }
+    }));
+    let (item_tx, item_rx) = std::sync::mpsc::channel::<TrayAction>();
+    tray_icon::menu::MenuEvent::set_event_handler(Some(move |e: tray_icon::menu::MenuEvent| {
+        match e.id().as_ref() {
+            SHOW_ID => { let _ = item_tx.send(TrayAction::Show); }
+            QUIT_ID => { let _ = item_tx.send(TrayAction::Quit); }
+            _ => {}
+        }
+    }));
+
     let mut pending = Some(url_rx);
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -123,7 +142,22 @@ fn run() -> anyhow::Result<()> {
                         pending = None;
                     }
                 }
-                *control_flow = if pending.is_some() {
+                // 托盘事件（两个 handler 分开，这里统一收）
+                for rx in [&menu_rx, &item_rx] {
+                    while let Ok(action) = rx.try_recv() {
+                        match action {
+                            TrayAction::Show => window.set_visible(true),
+                            TrayAction::Quit => *control_flow = ControlFlow::Exit,
+                        }
+                    }
+                }
+                let mut any_pending = pending.is_some();
+                for rx in [&menu_rx, &item_rx] {
+                    if !rx.try_recv().is_err() {
+                        any_pending = true;
+                    }
+                }
+                *control_flow = if pending.is_some() || any_pending {
                     ControlFlow::Poll
                 } else {
                     ControlFlow::Wait
@@ -133,14 +167,80 @@ fn run() -> anyhow::Result<()> {
                 event: tao::event::WindowEvent::CloseRequested,
                 ..
             } => {
-                // 关窗即退出：数据都在事件日志里，没有需要优雅关闭的东西
-                *control_flow = ControlFlow::Exit;
+                // 关窗=隐藏到托盘：进程与数据常驻，再次打开瞬时可达。
+                // 真正退出走托盘菜单「退出」。
+                window.set_visible(false);
             }
             _ => {}
         }
-        let _ = &webview; // 保持 WebView 存活
+        let _ = (&webview, &tray); // 保持 WebView 与托盘存活
     });
     Ok(())
+}
+
+enum TrayAction {
+    Show,
+    Quit,
+}
+
+const SHOW_ID: &str = "mneme-show";
+const QUIT_ID: &str = "mneme-quit";
+
+/// 托盘图标是程序里现画的像素「m」——不想为了一个图标引入资源文件与构建步骤。
+fn build_tray() -> tray_icon::TrayIcon {
+    use tray_icon::menu::{Menu, MenuItem};
+    use tray_icon::{TrayIconBuilder};
+
+    const W: usize = 24;
+    // 简单的像素字母 m（accent 色块），1 = 实心
+    const ART: [&str; 8] = [
+        "..####..",
+        ".######.",
+        "##.##.##",
+        "##.##.##",
+        "##.##.##",
+        "##.##.##",
+        "##...###",
+        "##...###",
+    ];
+    let mut rgba = vec![0u8; W * W * 4];
+    let scale = 2usize; // 8x8 艺术放大到 16x16，居中在 24x24 里
+    let ox = (W - 8 * scale) / 2;
+    let oy = (W - 8 * scale) / 2;
+    for (r, line) in ART.iter().enumerate() {
+        for (c, ch) in line.chars().enumerate() {
+            if ch != '#' {
+                continue;
+            }
+            for dy in 0..scale {
+                for dx in 0..scale {
+                    let x = ox + c * scale + dx;
+                    let y = oy + r * scale + dy;
+                    let i = (y * W + x) * 4;
+                    // #6aa9ff
+                    rgba[i] = 0x6a;
+                    rgba[i + 1] = 0xa9;
+                    rgba[i + 2] = 0xff;
+                    rgba[i + 3] = 0xff;
+                }
+            }
+        }
+    }
+    let icon = tray_icon::Icon::from_rgba(rgba, W as u32, W as u32).expect("托盘图标");
+
+    let menu = Menu::new();
+    let show = MenuItem::with_id(SHOW_ID, "显示 mneme", true, None);
+    let quit = MenuItem::with_id(QUIT_ID, "退出", true, None);
+    let _ = menu.append(&show);
+    let _ = menu.append(&quit);
+
+    TrayIconBuilder::new()
+        .with_id("mneme-tray")
+        .with_icon(icon)
+        .with_tooltip("mneme — 关闭窗口后仍在此处")
+        .with_menu(Box::new(menu))
+        .build()
+        .expect("创建托盘失败")
 }
 
 /// 错误信息放进 about:blank 的 fragment，只做最朴素的转义（没有 HTML 转义库可用）。
