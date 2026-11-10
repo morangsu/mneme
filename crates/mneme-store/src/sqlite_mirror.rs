@@ -74,6 +74,7 @@ impl SqliteMirror {
         cards: &std::collections::BTreeMap<String, Vec<Card>>,
         events: &[ReviewEvent],
         events_from: usize,
+        write_cards: bool,
     ) -> Result<()> {
         {
             let mut del_cards = tx.prepare("DELETE FROM cards WHERE entity_id = ?1")?;
@@ -82,7 +83,10 @@ impl SqliteMirror {
                  VALUES(?1,?2,?3,?4,?5,?6,?7)",
             )?;
             for e in entities.iter().filter(|e| dirty.contains(&e.id)) {
-                del_cards.execute(params![e.id])?;
+                // 卡片没装载时不能删也不能写：删了就等于把镜像里的卡片清空
+                if write_cards {
+                    del_cards.execute(params![e.id])?;
+                }
                 up.execute(params![
                     e.id,
                     e.kind,
@@ -94,7 +98,7 @@ impl SqliteMirror {
                 ])?;
             }
         }
-        {
+        if write_cards {
             let mut st = tx.prepare(
                 "INSERT OR REPLACE INTO cards(id,entity_id,direction,prompt,answer,json) VALUES(?1,?2,?3,?4,?5,?6)",
             )?;
@@ -130,6 +134,12 @@ impl SqliteMirror {
         Ok(())
     }
 
+    /// 读 meta（给「卡片总数」这类启动期就要用的轻量水信用）。
+    pub fn meta_value(&self, k: &str) -> Option<String> {
+        let conn = self.conn.lock();
+        Self::meta_get(&conn, k)
+    }
+
     fn meta_get(conn: &rusqlite::Connection, k: &str) -> Option<String> {
         conn.query_row("SELECT v FROM meta WHERE k = ?1", params![k], |r| r.get(0))
             .ok()
@@ -155,7 +165,7 @@ impl SqliteMirror {
         events: &[ReviewEvent],
     ) -> Result<()> {
         self.invalidate()?;
-        self.sync_inner(entities, cards, events, true)
+        self.sync_inner(entities, cards, events, true, true)
     }
 
     /// 清空镜像（下一次 `sync` 会整份写回）。比「逐行 DELETE」快，且不受残留影响。
@@ -178,8 +188,9 @@ impl SqliteMirror {
         entities: &[Entity],
         cards: &std::collections::BTreeMap<String, Vec<Card>>,
         events: &[ReviewEvent],
+        write_cards: bool,
     ) -> Result<()> {
-        self.sync_inner(entities, cards, events, false)
+        self.sync_inner(entities, cards, events, false, write_cards)
     }
 
     fn sync_inner(
@@ -188,6 +199,7 @@ impl SqliteMirror {
         cards: &std::collections::BTreeMap<String, Vec<Card>>,
         events: &[ReviewEvent],
         force: bool,
+        write_cards: bool,
     ) -> Result<()> {
         let mut conn = self.conn.lock();
         let tx = conn.transaction()?;
@@ -249,7 +261,7 @@ impl SqliteMirror {
         }
 
         if !dirty.is_empty() || !removed.is_empty() || events_from < events.len() {
-            Self::write_dirty(&tx, &dirty, entities, cards, events, events_from)?;
+            Self::write_dirty(&tx, &dirty, entities, cards, events, events_from, write_cards)?;
         }
         Self::meta_set(&tx, "events_n", &events.len().to_string())?;
         let _ = Self::meta_set(&tx, "entities_n", &entities.len().to_string());
@@ -272,7 +284,7 @@ impl SqliteMirror {
             .filter(|n| *n <= events.len())
             .unwrap_or(0);
         let tx = conn.transaction()?;
-        Self::write_dirty(&tx, dirty, entities, cards, events, events_from)?;
+        Self::write_dirty(&tx, dirty, entities, cards, events, events_from, true)?;
         Self::meta_set(&tx, "events_n", &events.len().to_string())?;
         tx.commit()?;
         Ok(())
@@ -310,6 +322,50 @@ impl SqliteMirror {
                 serde_json::to_string(e).unwrap_or_default()
             ],
         )?;
+        Ok(())
+    }
+
+    /// 镜像里现有多少张卡（判断「卡片表是否落后」用）。
+    pub fn card_count(&self) -> Result<usize> {
+        let conn = self.conn.lock();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM cards", [], |r| r.get(0))?;
+        Ok(n as usize)
+    }
+
+    /// 整表重写卡片（懒加载补齐镜像时用一次；卡片数据量固定，不需要增量）。
+    pub fn sync_cards(
+        &self,
+        cards: &std::collections::BTreeMap<String, Vec<Card>>,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM cards", [])?;
+        {
+            let mut st = tx.prepare(
+                "INSERT OR REPLACE INTO cards(id,entity_id,direction,prompt,answer,json) VALUES(?1,?2,?3,?4,?5,?6)",
+            )?;
+            for block in cards.values() {
+                for c in block {
+                    st.execute(params![
+                        c.id,
+                        c.entity_id,
+                        c.direction,
+                        c.prompt,
+                        c.answer,
+                        serde_json::to_string(c).unwrap_or_default()
+                    ])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn set_meta(&self, k: &str, v: &str) -> Result<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        Self::meta_set(&tx, k, v)?;
+        tx.commit()?;
         Ok(())
     }
 

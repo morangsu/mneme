@@ -83,6 +83,7 @@ fn cards_survive_reopen_and_cache_is_used() {
     let dir = tmp("reopen");
     seed(&dir);
     let (first, _) = Store::open_timed(&dir, "t").unwrap();
+    first.ensure_cards().unwrap();
     let n1 = first.stats().cards;
     let ids1 = card_ids(&first);
     assert!(n1 > 0, "应该有卡片");
@@ -90,6 +91,7 @@ fn cards_survive_reopen_and_cache_is_used() {
 
     assert!(dir.join("cards.bin").exists(), "首次打开应写出卡片缓存");
     let (second, timing) = Store::open_timed(&dir, "t").unwrap();
+    second.ensure_cards().unwrap();
     assert_eq!(second.stats().cards, n1, "重开后卡数必须一致");
     assert_eq!(card_ids(&second), ids1, "重开后卡 id 集合必须一致");
     assert!(
@@ -104,6 +106,7 @@ fn editing_one_entity_only_rebuilds_its_cards() {
     let dir = tmp("edit");
     seed(&dir);
     let (store, _) = Store::open_timed(&dir, "t").unwrap();
+    store.ensure_cards().unwrap();
     let before = card_ids(&store);
     let guizhi_before: Vec<_> = store.read(|m| m.cards.get("桂枝").cloned().unwrap_or_default());
     let mahuang_before = store.read(|m| m.cards.get("麻黄").cloned().unwrap_or_default());
@@ -137,6 +140,7 @@ fn editing_one_entity_only_rebuilds_its_cards() {
     // 重开之后结果必须一致（缓存不能把旧卡留下来）
     drop(store);
     let (again, _) = Store::open_timed(&dir, "t").unwrap();
+    again.ensure_cards().unwrap();
     assert_eq!(card_ids(&again), after, "重开后卡片应与编辑后完全一致");
     assert!(again.read(|m| m.find_card("不存在").is_none()));
 }
@@ -146,6 +150,7 @@ fn incremental_index_matches_full_rebuild_after_edits() {
     let dir = tmp("index");
     seed(&dir);
     let store = Store::open_timed(&dir, "t").unwrap().0;
+    store.ensure_cards().unwrap();
     let mut e = store.read(|m| m.entities.get("桂枝").cloned().unwrap());
     e.set("effects", Value::Tags(vec!["温通经脉".into()]), 2);
     store.mutate(&[Op::UpsertEntity { entity: e }]).unwrap();
@@ -188,13 +193,82 @@ fn cards_rebuild_when_cache_is_missing() {
     let dir = tmp("nocache");
     seed(&dir);
     let (store, _) = Store::open_timed(&dir, "t").unwrap();
+    store.ensure_cards().unwrap();
     let expected = store.stats().cards;
     drop(store);
     let _ = std::fs::remove_file(dir.join("cards.bin"));
 
     let (store, _) = Store::open_timed(&dir, "t").unwrap();
+    store.ensure_cards().unwrap();
     assert_eq!(store.stats().cards, expected, "无缓存时应重建出同样多的卡");
     assert!(dir.join("cards.bin").exists(), "重建后应重新写出缓存");
     let schema: DomainSchema = store.read(|m| m.schema.clone()).expect("schema");
     assert_eq!(schema.id, "test");
+}
+
+#[test]
+fn cards_are_lazy_but_count_is_accurate() {
+    let dir = tmp("lazy");
+    seed(&dir);
+    // 先跑一次完整装载，让 cards_n 水位落进镜像
+    {
+        let (s, _) = Store::open_timed(&dir, "t").unwrap();
+        s.ensure_cards().unwrap();
+        assert!(s.stats().cards > 0);
+    }
+
+    let (s, _) = Store::open_timed(&dir, "t").unwrap();
+    // 打开时不该装载卡片：矩阵页只要数字
+    assert!(!s.read(|m| m.cards_loaded), "open 不该装卡");
+    assert!(s.read(|m| m.cards.is_empty()), "内存里不该有卡片块");
+    assert!(s.stats().cards > 0, "但卡片总数要靠镜像水位给出（不能显示 0）");
+
+    s.ensure_cards().unwrap();
+    assert!(s.read(|m| m.cards_loaded));
+    assert!(!s.read(|m| m.cards.is_empty()));
+    assert_eq!(s.stats().cards, s.read(|m| m.cards_flat().len()));
+}
+
+#[test]
+fn mutate_loads_cards_first() {
+    // 写路径要替换卡片块，所以必须先装载——不能出现「编辑后卡片统计变成 0」
+    let dir = tmp("mutate");
+    seed(&dir);
+    let (s, _) = Store::open_timed(&dir, "t").unwrap();
+    assert!(!s.read(|m| m.cards_loaded));
+
+    let mut e = s.read(|m| m.entities.get("石膏").cloned().unwrap());
+    e.set("effects", Value::Tags(vec!["除烦止渴".into()]), 5);
+    s.mutate(&[Op::UpsertEntity { entity: e }]).unwrap();
+
+    assert!(s.read(|m| m.cards_loaded), "写之前应自动装载");
+    assert!(s.stats().cards > 0);
+    assert_eq!(
+        s.sqlite().unwrap().counts().unwrap().cards,
+        s.stats().cards,
+        "镜像卡片数应与内存一致"
+    );
+}
+
+#[test]
+fn opening_without_cards_does_not_wipe_mirror_cards() {
+    // 懒加载最容易踩的坑：open 时卡片是空的，如果照常写镜像就会把 cards 表清空
+    let dir = tmp("keepcards");
+    seed(&dir);
+    let before = {
+        let (s, _) = Store::open_timed(&dir, "t").unwrap();
+        s.ensure_cards().unwrap();
+        s.sqlite().unwrap().counts().unwrap().cards
+    };
+    assert!(before > 0);
+
+    // 再打开一次（不装卡），然后强制同步镜像
+    let (s, _) = Store::open_timed(&dir, "t").unwrap();
+    assert!(!s.read(|m| m.cards_loaded));
+    s.sync_sqlite().unwrap();
+    assert_eq!(
+        s.sqlite().unwrap().counts().unwrap().cards,
+        before,
+        "不装卡时同步镜像不能删掉 cards"
+    );
 }

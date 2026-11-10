@@ -78,6 +78,14 @@ fn err(e: impl std::fmt::Display) -> Json {
     json!({ "error": e.to_string() })
 }
 
+/// 懒加载卡片：只有「要卡片内容」的入口才调它（复习 / 判分 / 错题本 / 导出）。
+/// 矩阵、检索、编辑详情只用实体与索引，调了就是白白多花 80 ms。
+fn ensure_cards(a: &App) -> std::result::Result<(), Json> {
+    a.store
+        .ensure_cards()
+        .map_err(|e| json!({ "error": e.to_string() }))
+}
+
 fn load_review_config(root: &Path) -> ReviewConfig {
     fs::read(root.join("review.json"))
         .ok()
@@ -465,6 +473,9 @@ pub fn set_review_config(config_json: String) -> String {
 
 fn quiz_queue_inner(new_limit: u32, due_limit: u32, session_limit: u32) -> String {
     call(|a| {
+        if let Err(e) = ensure_cards(a) {
+            return e;
+        }
         let now = now_ms();
         let (cards, events, entities, schema) = a.store.read(|m| {
             (
@@ -551,6 +562,9 @@ fn quiz_queue_inner(new_limit: u32, due_limit: u32, session_limit: u32) -> Strin
 }#[uniffi::export]
 pub fn answer(card_id: String) -> String {
     call(|a| {
+        if let Err(e) = ensure_cards(a) {
+            return e;
+        }
         let found = a.store.read(|m| m.find_card(&card_id).cloned());
         match found {
             Some(c) => json!({ "answer": c.answer, "accept": c.accept, "boundary": c.immutable_boundary }),
@@ -562,6 +576,9 @@ pub fn answer(card_id: String) -> String {
 #[uniffi::export]
 pub fn review(card_id: String, grade: u8) -> String {
     call(|a| {
+        if let Err(e) = ensure_cards(a) {
+            return e;
+        }
         let now = now_ms();
         let device = a.store.device().to_string();
         let ev = ReviewEvent {
@@ -651,6 +668,9 @@ pub fn review(card_id: String, grade: u8) -> String {
 #[uniffi::export]
 pub fn judge(card_id: String, input: String) -> String {
     call(|a| {
+        if let Err(e) = ensure_cards(a) {
+            return e;
+        }
         let (card, defs) = a.store.read(|m| {
             (
                 m.find_card(&card_id).cloned(),
@@ -674,6 +694,9 @@ pub fn suggest_grade(correct: bool, elapsed_ms: i64, score: f64) -> String {
 #[uniffi::export]
 pub fn weak_cards(limit: u32) -> String {
     call(|a| {
+        if let Err(e) = ensure_cards(a) {
+            return e;
+        }
         let now = now_ms();
         let (events, cards) = a.store.read(|m| (m.events.clone(), m.cards_flat()));
         let weak = core_weak_cards(&events, now, limit as usize);
@@ -1725,6 +1748,9 @@ pub fn import_data(content: String, filename: String, dry: bool) -> String {
 #[uniffi::export]
 pub fn export_data(format: String) -> String {
     call(|a| {
+        if let Err(e) = ensure_cards(a) {
+            return e;
+        }
         let fmt = match Format::from_str(&format) {
             Ok(f) => f,
             Err(e) => return err(e),

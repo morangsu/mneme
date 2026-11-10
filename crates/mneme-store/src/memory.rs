@@ -23,7 +23,13 @@ pub struct Memory {
     /// card_id -> entity_id，按卡 id 取卡时不用扫全表。
     pub card_owner: HashMap<String, String>,
     /// 卡片总数（分块后 `cards.len()` 变成块数，别让它冒充卡数）。
+    ///
+    /// 懒加载时这个数可以是「上次落盘时的值」，不必等卡片真的装进来——
+    /// 矩阵页顶部只显示数量，没必要为了一个数字去解码 34k 张卡。
     cards_total: usize,
+    /// 卡片是否已真正装入内存。`false` 时 `cards` 是空表，
+    /// 任何需要卡片内容的路径都必须先 `Store::ensure_cards()`。
+    pub cards_loaded: bool,
     pub index: InvertedIndex,
     pub rev: u64,
     pub device: String,
@@ -178,6 +184,7 @@ impl Memory {
     pub fn rebuild_derived(&mut self) {
         self.rebuild_index();
         self.rebuild_cards();
+        self.mark_cards_loaded();
     }
 
     /// 只重建脏实体的索引与卡片。
@@ -241,6 +248,17 @@ impl Memory {
 
     pub fn cards_len(&self) -> usize {
         self.cards_total
+    }
+
+    /// 启动时用上次落盘的总数占位（见 `cards_total` 的注释）。
+    pub fn set_cards_total(&mut self, n: usize) {
+        self.cards_total = n;
+    }
+
+    /// 装载结束：以实际内容为准修正总数并标记已装载。
+    pub fn mark_cards_loaded(&mut self) {
+        self.cards_total = self.cards.values().map(|v| v.len()).sum();
+        self.cards_loaded = true;
     }
 
     /// 扁平化（导出、出题队列等读路径用）。克隆一次，调用方只在需要 `&[Card]` 时用。

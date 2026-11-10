@@ -194,6 +194,9 @@ pub fn detect(path: Option<&Path>, bytes: &[u8]) -> Format {
 }
 
 pub fn export_bytes(store: &Store, format: Format, now: i64) -> Result<(Vec<u8>, ExportReport)> {
+    // 卡片是懒加载的；导出（Anki / 离线 HTML）要全量卡片，这里统一兜住，
+    // 免得每个调用方（FFI / server / CLI）各自记得加一句。
+    store.ensure_cards()?;
     let snap = store.current_snapshot(now)?;
     let payload = Payload::from_snapshot(&snap);
     let (schema, cards) = store.read(|m| (m.schema.clone(), m.cards_flat()));

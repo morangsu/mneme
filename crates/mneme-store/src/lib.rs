@@ -78,6 +78,9 @@ pub struct Stats {
 
 pub struct Store {
     root: PathBuf,
+    /// 卡片装载闸门。懒加载必须只装一次：FFI 与 server 可能并发进来，
+    /// 没有这道锁就会把 34k 张卡装两遍（白花 80 ms，还浪费一份内存）。
+    cards_gate: parking_lot::Mutex<()>,
     device: String,
     log: EventLog,
     snaps: SnapshotStore,
@@ -129,6 +132,7 @@ impl Store {
         )?));
         let store = Arc::new(Self {
             root,
+            cards_gate: parking_lot::Mutex::new(()),
             device: sanitize(device),
             log,
             snaps,
@@ -137,9 +141,23 @@ impl Store {
             sqlite,
         });
 
-        // 卡片：能命中缓存就只重算「依赖变了」的那几块
+        // 卡片**不在这里装**：矩阵页只需要一个数字，真正要卡片的是复习/导出。
+        // 用上次落盘时的总数占位，等 `ensure_cards()` 再真装。
         let started = std::time::Instant::now();
-        store.load_or_build_cards()?;
+        #[cfg(feature = "sqlite")]
+        if let Some(s) = &store.sqlite {
+            // 老库升级（meta 里还没有 cards_n）时退回一次 COUNT(*) 并写回水位，
+            // 否则升级后的第一次启动会显示「卡片 0」（真机踩过）。
+            let n = match s.meta_value("cards_n").and_then(|v| v.parse::<usize>().ok()) {
+                Some(n) => n,
+                None => {
+                    let n = s.card_count().unwrap_or(0);
+                    let _ = s.set_meta("cards_n", &n.to_string());
+                    n
+                }
+            };
+            store.mem.write().set_cards_total(n);
+        }
         t.cards_cache = started.elapsed();
 
         #[cfg(feature = "sqlite")]
@@ -155,6 +173,36 @@ impl Store {
         Ok((store, t))
     }
 
+    /// 确保卡片已装入内存（幂等）。
+    ///
+    /// 所有「要卡片内容」的路径都必须先调它：复习、判分、错题本、导出。
+    /// 矩阵/检索/编辑详情不需要——它们只用实体与索引，这也是懒加载能省下 80 ms 的原因。
+    pub fn ensure_cards(&self) -> Result<()> {
+        if self.mem.read().cards_loaded {
+            return Ok(());
+        }
+        let _g = self.cards_gate.lock();
+        if self.mem.read().cards_loaded {
+            return Ok(());
+        }
+        self.load_or_build_cards()?;
+        self.mem.write().mark_cards_loaded();
+        // 镜像的 cards 表可能落后（懒加载的 open 不写卡片），这里补齐一次
+        #[cfg(feature = "sqlite")]
+        if let Some(s) = &self.sqlite {
+            let (total, have) = (self.mem.read().cards_len(), s.card_count().unwrap_or(0));
+            if total != have {
+                let m = self.mem.read();
+                s.sync_cards(&m.cards)?;
+                drop(m);
+            }
+            // 水位无条件写：镜像卡片数可能本来就对（编辑路径已经写过），
+            // 但 meta 里的总数还是空的——不写就会出现「卡片 0」（实测踩过）。
+            s.set_meta("cards_n", &total.to_string())?;
+        }
+        Ok(())
+    }
+
     /// 优先用 `cards.bin` 里的块，只重算指纹不匹配的实体。
     ///
     /// 命中率高的情况：换设备打开同一份数据、重启后没改过东西、只改了少数几条。
@@ -164,7 +212,7 @@ impl Store {
         let t0 = std::time::Instant::now();
         // 直接拿走所有权（`remove` 移出块），避免把 34k 张卡整份 clone 一遍
         let mut cache = cardcache::load(&self.root);
-        let t_load = t0.elapsed();
+        let _t_load = t0.elapsed();
 
         let (schema_fp, mut missing, mut adopted, any_cache) = {
             let m = self.mem.read();
@@ -194,7 +242,7 @@ impl Store {
             }
             (schema_fp, missing, adopted, usable.is_some())
         };
-        let t_plan = t0.elapsed();
+        let _t_plan = t0.elapsed();
 
         if !adopted.is_empty() {
             self.mem.write().adopt_blocks(adopted);
@@ -207,27 +255,42 @@ impl Store {
                 self.mem.write().apply_derived(&dirty);
             }
         }
-        let t_build = t0.elapsed();
+        let _t_build = t0.elapsed();
 
         // 缓存缺失/不匹配/有块重算过 -> 重写一份
         if !any_cache || !missing.is_empty() {
+            let _ = schema_fp;
+            self.save_card_cache();
+        }
+        Ok(())
+    }
+
+    /// 把当前内存里的卡片块整份落盘（失败只影响下次启动速度，不返回错误）。
+    fn save_card_cache(&self) {
+        let (schema_fp, fps, blocks) = {
             let m = self.mem.read();
-            let fps = m.block_fps();
             let mut blocks = std::collections::HashMap::with_capacity(m.cards.len());
             for (id, cards) in &m.cards {
                 blocks.insert(
                     id.clone(),
                     cardcache::Block {
-                        fp: fps.get(id).copied().unwrap_or(0),
+                        fp: 0, // 下面统一用批量指纹填
                         cards: cards.clone(),
                     },
                 );
             }
-            let cache = cardcache::CardCache { schema_fp, blocks };
-            // 写失败不影响使用，只是下次还得重算
-            let _ = cardcache::save(&self.root, &cache);
+            (m.schema_fp(), m.block_fps(), blocks)
+        };
+        let mut out = std::collections::HashMap::with_capacity(blocks.len());
+        for (id, mut block) in blocks {
+            block.fp = fps.get(&id).copied().unwrap_or(0);
+            out.insert(id, block);
         }
-        Ok(())
+        let cache = cardcache::CardCache {
+            schema_fp,
+            blocks: out,
+        };
+        let _ = cardcache::save(&self.root, &cache);
     }
 
     pub fn root(&self) -> &Path {
@@ -258,6 +321,14 @@ impl Store {
             return Ok(0);
         }
         self.log.append(ops)?;
+        // 写路径要替换卡片块、也要让统计准确，所以先把卡装进来。
+        // 两个例外：只追加复习事件（不改卡片）、以及**空库**首次导入
+        // ——那时装卡等于对空表做一次全量重建再把它作废，纯浪费。
+        let had_entities = !self.mem.read().entities.is_empty();
+        let touches_entities = ops.iter().any(|op| !matches!(op, Op::Review { .. }));
+        if had_entities && touches_entities {
+            self.ensure_cards()?;
+        }
         let (n, dirty) = {
             let mut m = self.mem.write();
             let mut n = 0;
@@ -295,8 +366,17 @@ impl Store {
                 s.apply_changes(&dirty, &m.entities_vec(), &m.cards, &m.events)?;
             }
         }
-        // 卡片缓存跟着失效：这里不重写（写 10 MB 会拖慢每次保存），
-        // 交给下次 open 时按块指纹补算。
+        // 全量重建（批量导入 / 改 schema）之后必须把卡片缓存写回去，
+        // 否则下次启动进复习还得再重建 2.2 秒。单条编辑不写（10 MB 不值得）。
+        let full = dirty.contains("*") || dirty.len() > FULL_DERIVE_THRESHOLD;
+        if full {
+            self.mem.write().mark_cards_loaded();
+            self.save_card_cache();
+        } else if !had_entities && !dirty.is_empty() {
+            // 空库导入：卡片刚全量建好，同样要落盘
+            self.mem.write().mark_cards_loaded();
+            self.save_card_cache();
+        }
         Ok(n)
     }
 
@@ -313,7 +393,13 @@ impl Store {
     pub fn sync_sqlite(&self) -> Result<()> {
         if let Some(s) = &self.sqlite {
             let m = self.mem.read();
-            s.sync(&m.entities_vec(), &m.cards, &m.events)?;
+            // 卡片没装载时绝不能写 cards 表：那等于把镜像里的卡片全删了。
+            // 同理也不能写 cards_n —— 那一刻内存里是 0，写进去就把水位抹平了，
+            // 下次启动矩阵页会显示「卡片 0」（实测踩过）。
+            s.sync(&m.entities_vec(), &m.cards, &m.events, m.cards_loaded)?;
+            if m.cards_loaded {
+                s.set_meta("cards_n", &m.cards_len().to_string())?;
+            }
         }
         Ok(())
     }

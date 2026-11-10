@@ -135,6 +135,16 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// 已有 listener 的版本：桌面壳要先用 `:0` 拿随机端口再开窗，
+/// `serve` 里自己 bind 会和这个 listener 打架（实测 10048 端口占用）。
+pub async fn serve_on(
+    state: AppState,
+    listener: tokio::net::TcpListener,
+) -> anyhow::Result<()> {
+    axum::serve(listener, router(state)).await?;
+    Ok(())
+}
+
 pub async fn serve(state: AppState, port: u16, lan: bool) -> anyhow::Result<()> {
     let addr = if lan {
         SocketAddr::from(([0, 0, 0, 0], port))
@@ -380,6 +390,9 @@ async fn api_quiz(
     Query(q): Query<HashMap<String, String>>,
 ) -> Json<JsonValue> {
     let limit: usize = q.get("limit").and_then(|x| x.parse().ok()).unwrap_or(1);
+    if let Err(e) = s.store.ensure_cards() {
+        return Json(json!({ "error": e.to_string() }));
+    }
     let (cards, states) = s.store.read(|m| (m.cards_flat(), fold_events(&m.events, &Sm2Scheduler::default())));
     let due = due_cards(&states, now_ms(), cards.len());
     let mut picked: Vec<_> = due
@@ -402,6 +415,9 @@ async fn api_quiz(
 }
 
 async fn api_answer(State(s): State<AppState>, Path(id): Path<String>) -> Json<JsonValue> {
+    if let Err(e) = s.store.ensure_cards() {
+        return Json(json!({ "error": e.to_string() }));
+    }
     let found = s.store.read(|m| m.find_card(&id).cloned());
     match found {
         Some(c) => Json(json!({"answer": c.answer, "accept": c.accept, "boundary": c.immutable_boundary})),
@@ -438,6 +454,9 @@ struct JudgeBody {
 /// 自由输入判分：同义表述归一 + 中文归一化 + Dice 相似度，
 /// 全角、标点、OCR 错字都能容错；危险区字段不做同义替换。
 async fn api_judge(State(s): State<AppState>, Json(b): Json<JudgeBody>) -> Json<JsonValue> {
+    if let Err(e) = s.store.ensure_cards() {
+        return Json(json!({ "error": e.to_string() }));
+    }
     let (card, defs) = s.store.read(|m| {
         (
             m.find_card(&b.card_id).cloned(),

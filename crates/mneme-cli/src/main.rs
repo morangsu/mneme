@@ -448,6 +448,7 @@ async fn main() -> anyhow::Result<()> {
 
         Cmd::Quiz { limit, reveal } => {
             let store = open(&cli)?;
+            store.ensure_cards()?;
             let cards = store.read(|m| m.cards_flat());
             for (i, c) in cards.iter().take(*limit).enumerate() {
                 println!("\n{}. [{}] {}", i + 1, c.direction, c.prompt);
@@ -861,6 +862,12 @@ fn bench_startup(n: usize, rounds: usize, schema_path: &std::path::Path) -> anyh
     }
     let store = last.expect("at least one round");
 
+    // 懒加载：open 只装索引，卡片是「第一次进复习/导出」才装
+    let t = Instant::now();
+    store.ensure_cards()?;
+    let cards_lazy = t.elapsed();
+    let lazy_n = store.read(|m| m.cards_len());
+
     // 首屏数据：矩阵要的是整表投影（FFI view() 的等价物）
     let t = Instant::now();
     let list = store.read(|m| m.entities_vec());
@@ -959,6 +966,11 @@ fn bench_startup(n: usize, rounds: usize, schema_path: &std::path::Path) -> anyh
     println!("    卡片缓存      {:>7.2} ms   ← 命中则只校验块指纹", median(&mut caches.clone()));
     println!("    同步 SQLite   {:>7.2} ms   ← 只补差异", median(&mut sq));
     println!("  逐次 wall       {}", walls_detail.join(" / "));
+    println!(
+        "  首次装卡        {:>7.1} ms（{} 张，之后常驻）",
+        cards_lazy.as_secs_f64() * 1000.0,
+        lazy_n
+    );
     println!("  首屏整表投影    {:>7.2} ms（{} 行）", first_paint.as_secs_f64() * 1000.0, list.len());
     println!("  派生拆解        索引 {:>6.1} ms / 索引+卡片 {:>6.1} ms / {} 张卡 / 倒排 {} 字段 {} 词条",
         index_only.as_secs_f64() * 1000.0,
