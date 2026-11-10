@@ -469,20 +469,24 @@ async function openCreate() {
 })();
 
 // ---- 复习模式：题面 / 答案 / 四档评分全部走 Rust 侧 /api/quiz* -----------
-// 业务规则（到期判定、SM2、判分口径）一律不在这里重写，与手机端同源。
-const Q = { active: false, cards: [], idx: 0, due: 0, revealed: false, busy: false };
+// 业务规则（到期判定、FSRS、判分口径）一律不在这里重写，与手机端同源。
+// plan = 按复习参数出题；weak = 错题本（末尾连续答错 ≥2 次，连对两次移出）。
+const Q = { active: false, mode: 'plan', cards: [], idx: 0, due: 0, revealed: false, busy: false };
 const GRADE_LABEL = { 1: '忘了', 2: '困难', 3: '良好', 4: '简单' };
 
 function showQuizPane(on) {
   Q.active = on;
   $('quiz-pane').hidden = !on;
   document.querySelector('main').style.display = on ? 'none' : '';
+  if (!on) $('quiz-cfg').hidden = true;
 }
 
-async function startQuiz() {
+async function startQuiz(mode = 'plan') {
   showQuizPane(true);
+  Q.mode = mode;
   Q.cards = []; Q.idx = 0; Q.revealed = false;
-  await loadQuizCards();
+  if (mode === 'weak') await loadWeakCards();
+  else await loadQuizCards();
 }
 
 function exitQuiz() {
@@ -490,15 +494,22 @@ function exitQuiz() {
   Q.busy = false;
 }
 
+function renderQuizStats(r) {
+  $('quiz-stats').textContent =
+    `到期 ${r.due} · 新卡 ${r.new} · 薄弱 ${r.weak} · 水蛭 ${r.leech}` +
+    (r.retention != null ? ` · 留存 ${Math.round(r.retention * 100)}%` : '');
+}
+
 async function loadQuizCards() {
   $('quiz-note').textContent = '取题中…';
-  const r = await api('/api/quiz?limit=10');
+  const r = await api('/api/quiz/plan');
   if (r.error) {
     $('quiz-note').textContent = '错误：' + r.error;
     Q.cards = [];
     renderQuiz();
     return;
   }
+  renderQuizStats(r);
   Q.cards = r.cards || [];
   Q.due = r.due || 0;
   Q.idx = 0;
@@ -507,21 +518,59 @@ async function loadQuizCards() {
   $('quiz-note').textContent = Q.cards.length ? '' : '今天没有待复习卡片。';
 }
 
+async function loadWeakCards() {
+  $('quiz-note').textContent = '取错题本…';
+  const r = await api('/api/weak-cards?limit=50');
+  if (r.error) {
+    $('quiz-note').textContent = '错误：' + r.error;
+    Q.cards = [];
+    renderQuiz();
+    return;
+  }
+  $('quiz-stats').textContent = '';
+  Q.cards = (r.items || []).map((x) => ({ ...x, weak: true }));
+  Q.due = 0;
+  Q.idx = 0;
+  Q.revealed = false;
+  renderQuiz();
+  $('quiz-note').textContent = Q.cards.length ? '' : '错题本是空的，连对两次自然移出。';
+}
+
 function renderQuiz() {
   const c = Q.cards[Q.idx];
+  const label = Q.mode === 'weak' ? '错题本' : '今日队列';
   $('quiz-progress').textContent = Q.cards.length
-    ? `今日 ${Q.due} 张 · 第 ${Q.idx + 1}/${Q.cards.length} 张`
-    : `今日 ${Q.due} 张`;
-  $('quiz-dir').textContent = c ? (c.direction ? '方向：' + c.direction : '反向卡') : '';
-  $('quiz-prompt').textContent = c ? c.prompt : '没有待复习卡片';
+    ? `${label} ${Q.cards.length} 张 · 第 ${Q.idx + 1} 张`
+    : `${label} 0 张`;
+  $('quiz-dir').textContent = c
+    ? (c.direction ? '方向：' + c.direction : '反向卡') +
+      (c.misses ? ` · 连错 ${c.misses} 次` : '')
+    : '';
+  // 薄弱模式下题面就是实体名本身（错题本先看名字回忆功效），不额外藏
+  $('quiz-prompt').textContent = c ? c.prompt : (Q.mode === 'weak' ? '错题本是空的' : '没有待复习卡片');
   $('quiz-answer').hidden = true;
   $('quiz-answer').innerHTML = '';
+  renderQuizSrs(c);
   $('quiz-reveal').hidden = !c || Q.revealed;
   $('quiz-reveal').disabled = !c;
   $('quiz-judge').hidden = true;
   $('quiz-input').value = '';
   $('quiz-judge-out').textContent = '';
   $('quiz-grades').hidden = !c || !Q.revealed;
+}
+
+function renderQuizSrs(c) {
+  const el = $('quiz-srs');
+  if (!c || c.stability == null) { el.hidden = true; el.innerHTML = ''; return; }
+  const chips = [
+    `稳定 ${c.stability} 天`,
+    `难度 ${c.difficulty}`,
+    `可提取 ${c.retrievability}%`,
+    `遗忘 ${c.lapses} 次`,
+  ];
+  if (c.leech) chips.push('水蛭卡');
+  el.innerHTML = chips.map((x) => `<span class="srs-chip${c.leech && x === '水蛭卡' ? ' srs-leech' : ''}">${esc(x)}</span>`).join('');
+  el.hidden = false;
 }
 
 function asText(v) {
@@ -567,9 +616,13 @@ async function gradeQuiz(g) {
   if (r.error) { $('quiz-note').textContent = '错误：' + r.error; return; }
   Q.revealed = false;
   Q.idx++;
-  const note = `已记录：${GRADE_LABEL[g]}`;
+  let note = `已记录：${GRADE_LABEL[g]}`;
+  const m = r.mastery;
+  if (m && m.changed) note += ` · 掌握度：${m.prev || '（空）'} → ${m.label}`;
+  else if (m && m.label) note += ` · 掌握度：${m.label}`;
   if (Q.idx >= Q.cards.length) {
-    await loadQuizCards();
+    if (Q.mode === 'weak') await loadWeakCards();
+    else await loadQuizCards();
     $('quiz-note').textContent = note + ' · 本轮完成';
   } else {
     $('quiz-note').textContent = note;
@@ -577,17 +630,58 @@ async function gradeQuiz(g) {
   }
 }
 
-$('quiz-toggle').addEventListener('click', startQuiz);
+// ---- 复习参数：读写 review.json，与手机端同一份配置 ----------------------
+async function openQuizCfg() {
+  const box = $('quiz-cfg');
+  if (!box.hidden) { box.hidden = true; return; }
+  $('quiz-cfg-out').textContent = '';
+  const r = await api('/api/review-config');
+  if (r.error) { $('quiz-cfg-out').textContent = '错误：' + r.error; box.hidden = false; return; }
+  $('cfg-new').value = r.new_per_day ?? 10;
+  $('cfg-due').value = r.reviews_per_day ?? 100;
+  $('cfg-session').value = r.session_limit ?? 20;
+  $('cfg-retention').value = r.desired_retention ?? 0.9;
+  $('cfg-leech').value = r.leech_threshold ?? 8;
+  box.hidden = false;
+}
+
+async function saveQuizCfg() {
+  const body = {
+    new_per_day: Number($('cfg-new').value) || 0,
+    reviews_per_day: Number($('cfg-due').value) || 0,
+    session_limit: Number($('cfg-session').value) || 0,
+    desired_retention: Number($('cfg-retention').value) || 0.9,
+    leech_threshold: Number($('cfg-leech').value) || 8,
+  };
+  const r = await api('/api/review-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  $('quiz-cfg-out').textContent = r.error
+    ? '错误：' + r.error
+    : '已保存，下次取题生效';
+  if (!r.error) $('quiz-cfg').hidden = true;
+}
+
+$('quiz-toggle').addEventListener('click', () => startQuiz('plan'));
 $('quiz-exit').addEventListener('click', exitQuiz);
 $('quiz-reveal').addEventListener('click', revealQuiz);
+$('quiz-weak').addEventListener('click', () => startQuiz('weak'));
+$('quiz-cfg-btn').addEventListener('click', openQuizCfg);
+$('quiz-cfg-save').addEventListener('click', saveQuizCfg);
 document.querySelectorAll('#quiz-grades button[data-grade]').forEach((b) => {
   b.addEventListener('click', () => gradeQuiz(Number(b.dataset.grade)));
 });
-// 深链：?quiz=1 直接进复习，便于分享与无头截图验证
+// 深链：?quiz=1 直接进复习（&weak=1 走错题本），便于分享与无头截图验证
 {
   const qp = new URLSearchParams(location.search);
   if (qp.get('quiz') === '1') {
-    startQuiz().then(() => { if (qp.get('reveal') === '1') revealQuiz(); });
+    const mode = qp.get('weak') === '1' ? 'weak' : 'plan';
+    startQuiz(mode).then(() => {
+      if (qp.get('reveal') === '1') revealQuiz();
+      if (qp.get('cfg') === '1') openQuizCfg();
+    });
   }
 }
 

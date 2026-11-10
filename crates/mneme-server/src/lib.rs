@@ -9,14 +9,17 @@ use axum::{
     http::{StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Json, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use mneme_codec::{self as codec, Format, ImportOptions, ImportStrategy};
-use mneme_core::{ReviewEvent, Sm2Scheduler, TermTable, due_cards, fold_events, judge, now_ms};
+use mneme_core::{
+    ReviewConfig, ReviewEvent, Sm2Scheduler, TermTable, due_cards, fold_events, judge, now_ms,
+};
 use mneme_core::{
     Entity as CoreEntity, Group as CoreGroup, Value as CoreValue, MAX_DEPTH,
-    find_duplicates, group_tree, parse_paste_batch as core_parse_paste_batch,
-    path_names, would_cycle,
+    daily_queue, find_duplicates, generate_choices, group_tree,
+    mastery_label_ext, parse_paste_batch as core_parse_paste_batch,
+    path_names, weak_cards as core_weak_cards, would_cycle,
 };
 use mneme_store::{Op, Store};
 use mneme_sync::{SyncConfig, SyncEngine, incremental};
@@ -125,9 +128,13 @@ pub fn router(state: AppState) -> Router {
         .route("/view/{id}", get(api_view))
         .route("/reverse", get(api_reverse))
         .route("/quiz", get(api_quiz))
+        .route("/quiz/plan", get(api_quiz_plan))
         .route("/quiz/answer/{id}", get(api_answer))
         .route("/review", post(api_review))
         .route("/judge", post(api_judge))
+        .route("/weak-cards", get(api_weak_cards))
+        .route("/review-config", get(api_review_config_get))
+        .route("/review-config", put(api_review_config_put))
         .route("/import", post(api_import))
         .route("/export", get(api_export))
         .route("/sync/status", get(api_sync_status))
@@ -820,15 +827,89 @@ struct ReviewBody {
 }
 
 async fn api_review(State(s): State<AppState>, Json(b): Json<ReviewBody>) -> Json<JsonValue> {
+    if let Err(e) = s.store.ensure_cards() {
+        return Json(json!({ "error": e.to_string() }));
+    }
+    let now = now_ms();
+    let device = s.store.device().to_string();
     let ev = ReviewEvent {
-        card_id: b.card_id,
-        ts: now_ms(),
+        card_id: b.card_id.clone(),
+        ts: now,
         grade: b.grade.clamp(1, 4),
-        device: s.store.device().to_string(),
+        device: device.clone(),
         seq: 0,
     };
-    match s.store.mutate(&[Op::Review { event: ev.clone() }]) {
-        Ok(n) => Json(json!({ "ok": true, "applied": n, "event": ev.key() })),
+    let mut ops: Vec<Op> = vec![Op::Review { event: ev.clone() }];
+    let mut mastery = JsonValue::Null;
+
+    // 复习后顺带派生掌握度：同实体所有已复习卡的 SRS 状态聚合。
+    // 手工覆盖 30 天内有效（mastery_override_at），期间派生值不覆盖用户判断。
+    // 与 mneme-ffi 的 review() 同源；调度参数也取同一份 review.json，避免「队列说到期」与「掌握度说不用复习」打架。
+    let (mut events, cards, entities) =
+        s.store
+            .read(|m| (m.events.clone(), m.cards_flat(), m.entities_vec()));
+    events.push(ev.clone());
+    let sched = review_cfg(s.store.root()).scheduler();
+    let states = fold_events(&events, &sched);
+    let entity_id = cards
+        .iter()
+        .find(|c| c.id == b.card_id)
+        .map(|c| c.entity_id.clone());
+    if let (Some(entity_id), Some(entity)) = (
+        entity_id.as_deref(),
+        entities.iter().find(|e| Some(e.id.as_str()) == entity_id.as_deref()),
+    ) {
+        let e_cards: Vec<_> = cards.iter().filter(|c| c.entity_id == entity_id).collect();
+        let reviewed: Vec<_> = e_cards
+            .iter()
+            .filter_map(|c| states.get(&c.id))
+            .filter(|x| x.reps > 0)
+            .collect();
+        if !reviewed.is_empty() {
+            let stability =
+                reviewed.iter().map(|x| x.stability).sum::<f64>() / reviewed.len() as f64;
+            let lapses: u32 = reviewed.iter().map(|x| x.lapses).sum();
+            let reviewed_n = reviewed.len() as u32;
+            let total_n = e_cards.len() as u32;
+            let ids: Vec<&str> = e_cards.iter().map(|c| c.id.as_str()).collect();
+            let last_grade = events
+                .iter()
+                .filter(|e| ids.contains(&e.card_id.as_str()))
+                .map(|e| (e.ts, e.grade))
+                .max_by_key(|x| x.0)
+                .map(|x| x.1);
+            let label = mastery_label_ext(stability, lapses, last_grade, reviewed_n, total_n);
+
+            let override_at = entity.get("mastery_override_at").and_then(|v| match v {
+                CoreValue::Number(n) => Some(*n as i64),
+                _ => None,
+            });
+            let overridden = override_at.map(|t| now - t < 30 * 86_400_000).unwrap_or(false);
+            let cur = entity.get("mastery").map(|v| v.display()).unwrap_or_default();
+            if cur != label && !overridden {
+                let mut e2 = entity.clone();
+                e2.set("mastery", CoreValue::Text(label.into()), now);
+                e2.rev = s.store.stats().rev + 1;
+                e2.updated_at = now;
+                e2.device = device.clone();
+                mastery = json!({
+                    "changed": true, "label": label, "prev": cur,
+                    "reviewed": reviewed_n, "total": total_n,
+                    "stability": (stability * 100.0).round() / 100.0,
+                });
+                ops.push(Op::UpsertEntity { entity: e2 });
+            } else {
+                mastery = json!({
+                    "changed": false, "label": cur, "overridden": overridden,
+                    "reviewed": reviewed_n, "total": total_n,
+                    "stability": (stability * 100.0).round() / 100.0,
+                });
+            }
+        }
+    }
+
+    match s.store.mutate(&ops) {
+        Ok(n) => Json(json!({ "ok": true, "applied": n, "event": ev.key(), "mastery": mastery })),
         Err(e) => Json(json!({ "error": e.to_string() })),
     }
 }
@@ -861,6 +942,177 @@ async fn api_judge(State(s): State<AppState>, Json(b): Json<JudgeBody>) -> Json<
         "correct": j.correct,
         "matched": j.matched,
     }))
+}
+
+// ---------------------------------------------------------------- 复习计划 / 错题本 / 复习参数
+
+/// 复习参数：与 mneme-ffi 同源，读 `review.json`（没有就用默认值）。
+/// server 是长驻进程，但 review.json 改动会经 PUT 即时写盘，读侧每次现读，
+/// 所以桌面与手机端改动互相可见，不用重启。
+fn review_cfg(root: &FsPath) -> ReviewConfig {
+    fs::read(root.join("review.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<ReviewConfig>(&b).ok())
+        .map(|c| c.normalized())
+        .unwrap_or_default()
+}
+
+/// 按用户配置出题（/api/quiz/plan）：到期优先、新卡限量、会话截断，
+/// 卡片带记忆状态（S/D/R/lapses/leech）与选择题干扰项，与 mneme-ffi 的 quizPlan 同源。
+async fn api_quiz_plan(State(s): State<AppState>) -> Json<JsonValue> {
+    if let Err(e) = s.store.ensure_cards() {
+        return Json(json!({ "error": e.to_string() }));
+    }
+    let cfg = review_cfg(s.store.root());
+    let now = now_ms();
+    let (cards, events, entities, schema) = s.store.read(|m| {
+        (
+            m.cards_flat(),
+            m.events.clone(),
+            m.entities_vec(),
+            m.schema.clone(),
+        )
+    });
+    let sched = cfg.scheduler();
+    let states = fold_events(&events, &sched);
+    let q = daily_queue(
+        &cards, &states, now,
+        cfg.new_per_day as usize, cfg.reviews_per_day as usize,
+    );
+    let weak_n = core_weak_cards(&events, now, usize::MAX).len();
+    let leech_n = states.values().filter(|x| x.leech).count();
+
+    let mut ids = q.items.clone();
+    if cfg.session_limit > 0 && ids.len() > cfg.session_limit as usize {
+        ids.truncate(cfg.session_limit as usize);
+    }
+
+    let entity_name = |eid: &str| {
+        entities
+            .iter()
+            .find(|e| e.id == eid)
+            .map(|e| e.display_of("name"))
+            .unwrap_or_else(|| eid.to_string())
+    };
+    // 答案是不是「主字段名」（如药名）：是的话 UI 绝不能把实体名露出来
+    let ask_name = |c: &mneme_core::Card| {
+        let primary = entities
+            .iter()
+            .find(|e| e.id == c.entity_id)
+            .and_then(|e| {
+                schema
+                    .as_ref()
+                    .and_then(|sc| sc.entity_def(&e.kind))
+                    .and_then(|d| d.primary.clone())
+            })
+            .unwrap_or_else(|| "name".into());
+        c.answer_fields.iter().any(|f| *f == primary)
+    };
+    let items: Vec<JsonValue> = ids
+        .iter()
+        .filter_map(|id| cards.iter().find(|c| &c.id == id))
+        .map(|c| {
+            let choices = schema.as_ref().and_then(|sc| {
+                entities
+                    .iter()
+                    .find(|e| e.id == c.entity_id)
+                    .map(|e| generate_choices(sc, e, &entities, 3))
+            }).unwrap_or_default();
+            let st = states.get(&c.id);
+            let elapsed_days = st
+                .map(|x| (now - x.last).max(0) as f64 / 86_400_000.0)
+                .unwrap_or(0.0);
+            json!({
+                "id": c.id, "prompt": c.prompt, "direction": c.direction,
+                "entity_id": c.entity_id,
+                "entity_name": entity_name(&c.entity_id),
+                "ask_name": ask_name(c),
+                "answer_fields": c.answer_fields,
+                "choices": choices, "boundary": c.immutable_boundary,
+                "stability": st.map(|x| (x.stability * 100.0).round() / 100.0),
+                "difficulty": st.map(|x| (x.difficulty * 100.0).round() / 100.0),
+                "lapses": st.map(|x| x.lapses).unwrap_or(0),
+                "leech": st.map(|x| x.leech).unwrap_or(false),
+                "retrievability": st.map(|x| {
+                    (sched.retrievability(elapsed_days, x.stability) * 100.0).round() / 100.0
+                }),
+            })
+        })
+        .collect();
+    Json(json!({
+        "due": q.due.len(), "new": q.new.len(), "total": q.items.len(),
+        "queued": items.len(),
+        "weak": weak_n, "leech": leech_n,
+        "session_limit": cfg.session_limit,
+        "retention": cfg.desired_retention,
+        "cards": items,
+    }))
+}
+
+/// 错题本：最近 30 天末尾连续答错 >=2 次的卡，连对两次自然移出。
+async fn api_weak_cards(
+    State(s): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Json<JsonValue> {
+    if let Err(e) = s.store.ensure_cards() {
+        return Json(json!({ "error": e.to_string() }));
+    }
+    let limit: usize = q.get("limit").and_then(|x| x.parse().ok()).unwrap_or(50);
+    let now = now_ms();
+    let (events, cards, entities) = s.store.read(|m| {
+        (
+            m.events.clone(),
+            m.cards_flat(),
+            m.entities_vec(),
+        )
+    });
+    let weak = core_weak_cards(&events, now, limit);
+    let items: Vec<JsonValue> = weak
+        .iter()
+        .filter_map(|w| cards.iter().find(|c| c.id == w.card_id).map(|c| (c, w)))
+        .map(|(c, w)| {
+            let name = entities
+                .iter()
+                .find(|e| e.id == c.entity_id)
+                .map(|e| e.display_of("name"))
+                .unwrap_or_else(|| c.entity_id.clone());
+            json!({
+                "card_id": c.id, "prompt": c.prompt, "direction": c.direction,
+                "entity_name": name,
+                "answer_fields": c.answer_fields,
+                "misses": w.misses, "last_ts": w.last_ts,
+            })
+        })
+        .collect();
+    Json(json!({ "items": items }))
+}
+
+async fn api_review_config_get(State(s): State<AppState>) -> Json<JsonValue> {
+    Json(json!(review_cfg(s.store.root())))
+}
+
+async fn api_review_config_put(
+    State(s): State<AppState>,
+    Json(patch): Json<JsonValue>,
+) -> Json<JsonValue> {
+    // 补丁语义：只传要改的字段，其余沿用当前配置（与 mneme-ffi 的 setReviewConfig 口径一致）
+    let mut cur = serde_json::to_value(review_cfg(s.store.root())).unwrap_or_else(|_| json!({}));
+    if let (Some(obj), Some(p)) = (cur.as_object_mut(), patch.as_object()) {
+        for (k, v) in p {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+    let cfg: ReviewConfig = match serde_json::from_value::<ReviewConfig>(cur) {
+        Ok(c) => c.normalized(),
+        Err(e) => return Json(json!({ "error": format!("复习配置 JSON 有误: {e}") })),
+    };
+    match serde_json::to_vec_pretty(&cfg) {
+        Ok(bytes) => match fs::write(s.store.root().join("review.json"), bytes) {
+            Ok(()) => Json(json!({ "ok": true, "config": cfg })),
+            Err(e) => Json(json!({ "error": format!("保存 review.json 失败: {e}") })),
+        },
+        Err(e) => Json(json!({ "error": format!("复习配置序列化失败: {e}") })),
+    }
 }
 
 // ---------------------------------------------------------------- 三仓库上游

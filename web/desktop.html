@@ -71,13 +71,26 @@
     <div class="quiz-head">
       <h2>复习</h2>
       <span class="muted" id="quiz-progress">今日 0 张</span>
+      <span class="muted" id="quiz-stats"></span>
       <span class="spacer"></span>
       <span class="muted"><kbd>空格</kbd>翻面 <kbd>1-4</kbd>评分 <kbd>Esc</kbd>退出</span>
+      <button id="quiz-weak" class="ghost" title="错题本：最近 30 天末尾连续答错 ≥2 次的卡">薄弱卡</button>
+      <button id="quiz-cfg-btn" class="ghost" title="新卡/到期/会话上限/期望留存等复习参数">参数</button>
       <button id="quiz-exit" class="ghost">退出</button>
+    </div>
+    <div id="quiz-cfg" hidden>
+      <label>新卡/天 <input id="cfg-new" type="number" min="0" max="500" /></label>
+      <label>到期/天 <input id="cfg-due" type="number" min="0" max="2000" /></label>
+      <label>单轮上限 <input id="cfg-session" type="number" min="0" max="500" /></label>
+      <label>期望留存 0~1 <input id="cfg-retention" type="number" min="0.5" max="0.99" step="0.01" /></label>
+      <label>水蛭阈值（连错次数） <input id="cfg-leech" type="number" min="2" max="99" /></label>
+      <button id="quiz-cfg-save">保存参数</button>
+      <span id="quiz-cfg-out" class="muted"></span>
     </div>
     <div class="quiz-card">
       <div class="muted" id="quiz-dir"></div>
       <div id="quiz-prompt"></div>
+      <div id="quiz-srs" class="quiz-srs" hidden></div>
       <div id="quiz-answer" hidden></div>
     </div>
     <div class="quiz-actions">
