@@ -799,47 +799,10 @@ pub fn entity_detail(entity_id: String) -> String {
             m.entities_vec().into_iter().find(|x| x.id == entity_id && !x.deleted)
         });
         let Some(e) = found else { return err(format!("实体不存在或已删除：{entity_id}")) };
-        let def = schema.entity_def(&e.kind);
-        let primary = def
-            .and_then(|d| d.primary.clone())
-            .unwrap_or_else(|| "name".into());
-        let fields: Vec<Json> = def
-            .map(|d| {
-                d.fields
-                    .iter()
-                    .map(|f| {
-                        json!({
-                            "key": f.key,
-                            "label": if f.label.is_empty() { f.key.clone() } else { f.label.clone() },
-                            "kind": kind_name(f.kind),
-                            "immutable": f.immutable,
-                            "required": f.required,
-                            "value": e.get(&f.key).map(|v| v.display()).unwrap_or_default(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        // 分组信息一起下发：编辑面板要显示「属于哪个分组」并能改，
-        // 否则用户只能从矩阵页的树里猜自己在哪一层。
         let groups: Vec<mneme_core::Group> = a.store.read(|m| m.groups.values().cloned().collect());
-        let group_path = e
-            .group_id
-            .as_deref()
-            .map(|gid| mneme_core::path_names(&groups, gid).join(" / "))
-            .unwrap_or_default();
-        json!({
-            "id": e.id,
-            "kind": e.kind,
-            "primary": primary,
-            "title": e.display_of(&primary),
-            "rev": e.rev,
-            "updated_at": e.updated_at,
-            "device": e.device,
-            "group_id": e.group_id.clone().unwrap_or_default(),
-            "group_path": group_path,
-            "fields": fields,
-        })
+        // 详情结构在 core（detail_view），server 的 /api/entity/{id} 也用它，
+        // 保证两端口径一致。
+        json!(mneme_core::entity::detail_view(&schema, &e, &groups))
     })
 }
 

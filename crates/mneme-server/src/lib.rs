@@ -31,6 +31,9 @@ use std::{
 };
 
 const INDEX: &str = include_str!("../../../web/index.html");
+const DESKTOP: &str = include_str!("../../../web/desktop.html");
+const DESKTOP_CSS: &str = include_str!("../../../web/desktop.css");
+const DESKTOP_JS: &str = include_str!("../../../web/desktop.js");
 const CSS: &str = include_str!("../../../web/app.css");
 const JS: &str = include_str!("../../../web/app.js");
 
@@ -130,7 +133,12 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(index))
         .route("/app.css", get(css))
         .route("/app.js", get(js))
+        .route("/desktop", get(|| async { Html(DESKTOP) }))
+        .route("/desktop.css", get(|| async { css_body(DESKTOP_CSS) }))
+        .route("/desktop.js", get(|| async { js_body(DESKTOP_JS) }))
         .route("/api/health", get(|| async { "ok" }))
+        .route("/api/entity/{id}", get(api_entity))
+        .route("/api/search", get(api_search))
         .nest("/api", api)
         .with_state(state)
 }
@@ -179,6 +187,52 @@ async fn auth(State(state): State<AppState>, req: Request, next: Next) -> Respon
     } else {
         (StatusCode::UNAUTHORIZED, "需要口令：在 URL 加 ?token=xxx").into_response()
     }
+}
+
+fn css_body(s: &'static str) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], s)
+}
+
+fn js_body(s: &'static str) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8")], s)
+}
+
+/// 实体详情：与 FFI 的 entityDetail 共用 core 的 detail_view。
+async fn api_entity(State(s): State<AppState>, Path(id): Path<String>) -> Json<JsonValue> {
+    let (schema, entities, groups) = s
+        .store
+        .read(|m| (m.schema.clone(), m.entities_vec(), m.groups.values().cloned().collect::<Vec<_>>()));
+    let Some(schema) = schema else {
+        return Json(json!({ "error": "还没有加载领域 schema" }));
+    };
+    let Some(e) = entities.into_iter().find(|x| x.id == id && !x.deleted) else {
+        return Json(json!({ "error": format!("实体不存在或已删除：{id}") }));
+    };
+    Json(mneme_core::entity::detail_view(&schema, &e, &groups))
+}
+
+/// 跨字段检索（与 FFI search 同一份 core 实现）。
+async fn api_search(State(s): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Json<JsonValue> {
+    let query = q.get("query").cloned().unwrap_or_default();
+    let limit: usize = q
+        .get("limit")
+        .and_then(|x| x.parse().ok())
+        .filter(|n| *n > 0 && *n <= 200)
+        .unwrap_or(50);
+    let (schema, entities, groups) = s
+        .store
+        .read(|m| {
+            (
+                m.schema.clone(),
+                m.entities_vec(),
+                m.groups.values().cloned().collect::<Vec<_>>(),
+            )
+        });
+    let Some(schema) = schema else {
+        return Json(json!({ "error": "还没有加载领域 schema" }));
+    };
+    let out = mneme_core::search(&schema, &entities, &groups, &query, None, limit);
+    Json(json!(out))
 }
 
 async fn index() -> Html<&'static str> {

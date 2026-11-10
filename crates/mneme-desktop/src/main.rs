@@ -30,53 +30,65 @@ fn run() -> anyhow::Result<()> {
     let t0 = Instant::now();
     let mut args = std::env::args().skip(1);
     let data = PathBuf::from(args.next().unwrap_or_else(|| "data".to_string()));
+    let fixed_port: Option<u16> = args.next().and_then(|s| s.parse().ok());
     let device = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "desktop".into());
 
-    // 1) 打开库（卡片懒加载：矩阵页不需要卡片）。
-    let (store, timings) = mneme_store::Store::open_timed(&data, &device)?;
-    println!(
-        "[t= {:>7.1} ms] 库已打开（重放 {:.1} / 索引 {:.1} / 卡片 {:.1} / 镜像 {:.1}，{} 实体）",
-        t0.elapsed().as_secs_f64() * 1000.0,
-        timings.replay.as_secs_f64() * 1000.0,
-        timings.derive.as_secs_f64() * 1000.0,
-        timings.cards_cache.as_secs_f64() * 1000.0,
-        timings.sqlite_rebuild.as_secs_f64() * 1000.0,
-        store.stats().entities,
-    );
-
-    // 2) 同进程起 axum：随机端口 + 随机 token，只听本机回环。
-    //    随机 token 的作用：别的本机进程就算知道端口，也拿不到数据。
-    let port = args.next().and_then(|s| s.parse::<u16>().ok()).unwrap_or(0);
-    let token = local_token();
-    let state = AppState::new(store, None, Some(token.clone()));
-    let server = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()?;
-    let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
+    // 库打开与 WebView 创建**并行**：WebView2 冷建 1.7 秒，而库只要几十毫秒，
+    // 串行就是白白排队。主线程立刻开窗显示「正在打开」，后台线程备好 URL 后再导航。
+    let (url_tx, url_rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
-        server.block_on(async move {
-            let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
-                .await
-                .expect("绑定 127.0.0.1 失败");
-            let port = listener.local_addr().expect("local_addr").port();
-            let _ = port_tx.send(port);
-            if let Err(e) = mneme_server::serve_on(state, listener).await {
-                eprintln!("server 退出: {e}");
-            }
-        });
+        let r = (|| -> anyhow::Result<String> {
+            let (store, timings) = mneme_store::Store::open_timed(&data, &device)?;
+            println!(
+                "[t= {:>7.1} ms] 库已打开（重放 {:.1} / 索引 {:.1} / 卡片 {:.1} / 镜像 {:.1}，{} 实体）",
+                t0.elapsed().as_secs_f64() * 1000.0,
+                timings.replay.as_secs_f64() * 1000.0,
+                timings.derive.as_secs_f64() * 1000.0,
+                timings.cards_cache.as_secs_f64() * 1000.0,
+                timings.sqlite_rebuild.as_secs_f64() * 1000.0,
+                store.stats().entities,
+            );
+            // 同进程 axum：随机端口 + 每次启动都变的随机 token，仅听 127.0.0.1。
+            // token 挡住本机其他进程；`/desktop` 页面本身公开，数据都在带 token 的 API 后面。
+            let token = local_token();
+            let state = AppState::new(store, None, Some(token.clone()));
+            let server = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()?;
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], fixed_port.unwrap_or(0)));
+            let listener = server
+                .block_on(async { tokio::net::TcpListener::bind(addr).await })
+                .context("绑定 127.0.0.1 失败")?;
+            let port = listener.local_addr().context("local_addr")?.port();
+            std::thread::spawn(move || {
+                server.block_on(async {
+                    if let Err(e) = mneme_server::serve_on(state, listener).await {
+                        eprintln!("server 退出: {e}");
+                    }
+                });
+            });
+            println!(
+                "[t= {:>7.1} ms] 服务已监听 http://127.0.0.1:{port}/desktop?token={token}",
+                t0.elapsed().as_secs_f64() * 1000.0
+            );
+            Ok(format!("http://127.0.0.1:{port}/desktop?token={token}"))
+        })();
+        let _ = url_tx.send(r.unwrap_or_else(|e| format!("about:blank#error={}", urlencoding_lite(&e.to_string()))));
     });
-    let port = port_rx.recv().context("server 启动失败")?;
-    let url = format!("http://127.0.0.1:{port}/?token={token}");
-    println!(
-        "[t= {:>7.1} ms] 服务已监听 {url}",
-        t0.elapsed().as_secs_f64() * 1000.0
-    );
 
-    // 3) 开窗 + WebView。
-    use tao::event_loop::EventLoop;
+    // 3) 主线程：立刻开窗 + WebView（先显示占位页），URL 就绪后导航过去。
+    use tao::event_loop::{ControlFlow, EventLoop};
     use tao::window::WindowBuilder;
     use wry::{PageLoadEvent, WebViewBuilder};
+
+    const LOADING: &str = concat!(
+        "<body style=\"margin:0;background:#16171a;color:#e6e7ea;",
+        "font-family:'Microsoft YaHei',sans-serif;display:flex;height:100vh;",
+        "align-items:center;justify-content:center;flex-direction:column;gap:8px\">",
+        "<div style=\"font-size:20px;font-weight:600\">mneme</div>",
+        "<div style=\"color:#9a9ca3;font-size:13px\">正在打开库…</div></body>"
+    );
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -84,12 +96,11 @@ fn run() -> anyhow::Result<()> {
         .with_inner_size(tao::dpi::LogicalSize::new(1180.0, 780.0))
         .build(&event_loop)?;
     let webview = WebViewBuilder::new()
-        .with_url(&url)
+        .with_html(LOADING)
         .with_on_page_load_handler(move |event, _| {
-            // 只关心「加载完成」：这是用户真正看到内容的时刻
             if matches!(event, PageLoadEvent::Finished) {
                 println!(
-                    "[t= {:>7.1} ms] 页面加载完成（首帧）",
+                    "[t= {:>7.1} ms] 页面加载完成",
                     t0.elapsed().as_secs_f64() * 1000.0
                 );
             }
@@ -97,22 +108,49 @@ fn run() -> anyhow::Result<()> {
         .build(&window)
         .context("创建 WebView 失败（需要 WebView2 Runtime）")?;
     println!(
-        "[t= {:>7.1} ms] WebView 已创建",
+        "[t= {:>7.1} ms] WebView 已创建（窗口先出，数据后台备）",
         t0.elapsed().as_secs_f64() * 1000.0
     );
 
+    let mut pending = Some(url_rx);
     event_loop.run(move |event, _, control_flow| {
-        if let tao::event::Event::WindowEvent {
-            event: tao::event::WindowEvent::CloseRequested,
-            ..
-        } = event
-        {
-            // 关窗即退出：数据都在事件日志里，没有需要优雅关闭的东西
-            *control_flow = tao::event_loop::ControlFlow::Exit;
+        match event {
+            tao::event::Event::NewEvents(..) => {
+                // URL 就绪（或失败）就导航过去；就绪前保持轮询
+                if let Some(rx) = &pending {
+                    if let Ok(url) = rx.try_recv() {
+                        let _ = webview.load_url(&url);
+                        pending = None;
+                    }
+                }
+                *control_flow = if pending.is_some() {
+                    ControlFlow::Poll
+                } else {
+                    ControlFlow::Wait
+                };
+            }
+            tao::event::Event::WindowEvent {
+                event: tao::event::WindowEvent::CloseRequested,
+                ..
+            } => {
+                // 关窗即退出：数据都在事件日志里，没有需要优雅关闭的东西
+                *control_flow = ControlFlow::Exit;
+            }
+            _ => {}
         }
         let _ = &webview; // 保持 WebView 存活
     });
     Ok(())
+}
+
+/// 错误信息放进 about:blank 的 fragment，只做最朴素的转义（没有 HTML 转义库可用）。
+fn urlencoding_lite(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            ' ' | '<' | '>' | '"' | '&' | '%' | '#' => format!("%{:02X}", c as u32),
+            _ => c.to_string(),
+        })
+        .collect()
 }
 
 /// 本机回环用的短口令。不追求密码学强度（攻击面只有本机进程），

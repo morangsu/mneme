@@ -232,3 +232,56 @@ impl ReviewEvent {
         stable_id(&[&self.card_id, &self.ts.to_string(), &self.device, &self.seq.to_string()])
     }
 }
+
+/// 实体详情视图（FFI 编辑面板与 HTTP server 共用一份实现）。
+///
+/// 之前 FFI 里有一份手写的，server 想给桌面前端补详情路由时只能再抄一遍——
+/// 两个端口径分叉就从「复制粘贴」开始，所以提到 core。
+/// 分组路径一起下发：UI 要显示「属于哪个分组」，不能让用户从树里猜。
+pub fn detail_view(
+    schema: &crate::schema::DomainSchema,
+    e: &Entity,
+    groups: &[Group],
+) -> serde_json::Value {
+    let Some(def) = schema.entity_def(&e.kind) else {
+        return serde_json::json!({ "error": format!("领域包缺少 {} 的定义", e.kind) });
+    };
+    let primary = def.primary.clone().unwrap_or_else(|| "name".into());
+    let fields: Vec<serde_json::Value> = def
+        .fields
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "key": f.key,
+                "label": if f.label.is_empty() { f.key.clone() } else { f.label.clone() },
+                "kind": match f.kind {
+                    crate::schema::FieldKind::Text => "text",
+                    crate::schema::FieldKind::Tag => "tag",
+                    crate::schema::FieldKind::Tags => "tags",
+                    crate::schema::FieldKind::Number => "number",
+                    crate::schema::FieldKind::Bool => "bool",
+                },
+                "immutable": f.immutable,
+                "required": f.required,
+                "value": e.get(&f.key).map(|v| v.display()).unwrap_or_default(),
+            })
+        })
+        .collect();
+    let group_path = e
+        .group_id
+        .as_deref()
+        .map(|gid| crate::groups::path_names(groups, gid).join(" / "))
+        .unwrap_or_default();
+    serde_json::json!({
+        "id": e.id,
+        "kind": e.kind,
+        "primary": primary,
+        "title": e.get(&primary).map(|v| v.display()).unwrap_or_default(),
+        "rev": e.rev,
+        "updated_at": e.updated_at,
+        "device": e.device,
+        "group_id": e.group_id.clone().unwrap_or_default(),
+        "group_path": group_path,
+        "fields": fields,
+    })
+}

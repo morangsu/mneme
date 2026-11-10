@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>mneme · 桌面</title>
+<link rel="stylesheet" href="/desktop.css" />
+</head>
+<body>
+<header>
+  <h1>mneme<span class="muted" id="state"></span></h1>
+  <div class="hint">
+    <kbd>/</kbd>检索 <kbd>j/k</kbd>移动 <kbd>Enter</kbd>详情 <kbd>[ ]</kbd>切视图 <kbd>Esc</kbd>收起
+  </div>
+</header>
+
+<main>
+  <aside id="side">
+    <input type="text" id="q" placeholder="检索：功效 / 性味 / 拼音首字母（mh）" autocomplete="off" />
+    <div class="muted" id="search-note">输入即搜；AND 无结果自动改 OR</div>
+    <div id="views"></div>
+    <div class="muted" id="meta"></div>
+  </aside>
+
+  <section id="list-pane">
+    <div class="muted" id="list-title"></div>
+    <div id="list"></div>
+  </section>
+
+  <aside id="detail">
+    <div class="muted">选择一条（Enter 或点击）查看详情</div>
+  </aside>
+</main>
+
+<script src="/desktop.js"></script>
+</body>
+</html>
