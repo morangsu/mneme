@@ -36,6 +36,8 @@ pub struct SyncReport {
     pub local_snapshot: String,
     pub diff_preview: String,
     pub conflicts: usize,
+    /// 两端 schema 不一致时的人话提示（schema 不随同步传播，分叉要人工对齐）
+    pub schema_divergence: Option<String>,
     pub retries: u32,
     pub bytes_up: usize,
     pub bytes_down: usize,
@@ -57,6 +59,9 @@ impl fmt::Display for SyncReport {
         }
         if self.dry_run {
             writeln!(f, "  [dry-run] 未上传、未覆盖本地")?;
+        }
+        if let Some(msg) = &self.schema_divergence {
+            writeln!(f, "  ⚠ {msg}")?;
         }
         if !self.diff_preview.is_empty() {
             writeln!(f, "{}", self.diff_preview)?;
@@ -332,6 +337,35 @@ impl SyncEngine {
         merged.entities.sort_by(|a, b| a.id.cmp(&b.id));
         merged.recheck();
 
+        // schema 不随增量同步传播（合并快照本地优先）——两端各用各的字段定义
+        // 出题/解析，会静默分叉。这里只提示不裁决：升级 schema 需要在旧的一端
+        // 重新加载领域包，属于人工决定。
+        let schema_divergence = remote_snap.as_ref().and_then(|rs| {
+            if rs.schema_toml.is_empty() || rs.schema_toml == local_snap.schema_toml {
+                return None;
+            }
+            let count = |toml: &str| {
+                DomainSchema::from_toml(toml)
+                    .map(|s| {
+                        s.entities
+                            .iter()
+                            .map(|e| (e.kind.clone(), e.fields.len()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            };
+            let lf = count(&local_snap.schema_toml);
+            let rf = count(&rs.schema_toml);
+            let fmt = |v: &[(String, usize)]| {
+                v.iter().map(|(k, n)| format!("{k} {n} 字段")).collect::<Vec<_>>().join("，")
+            };
+            Some(format!(
+                "两端领域定义不一致（本地：{}；远端：{}）——schema 不随同步传播，请在旧的一端重新加载新领域包，否则两端出题口径会分叉",
+                fmt(&lf),
+                fmt(&rf)
+            ))
+        });
+
         if dry {
             return Ok(SyncReport {
                 target: target_id.into(),
@@ -342,6 +376,7 @@ impl SyncEngine {
                 local_snapshot: format!("rev-{}", merged.rev),
                 diff_preview,
                 conflicts,
+                schema_divergence,
                 retries: 0,
                 bytes_up: 0,
                 bytes_down,
@@ -469,6 +504,7 @@ impl SyncEngine {
             local_snapshot: snap_path,
             diff_preview,
             conflicts,
+            schema_divergence,
             retries: 0,
             bytes_up,
             bytes_down,
