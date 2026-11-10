@@ -1,6 +1,11 @@
 package io.github.morangsu.mneme
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -25,10 +30,17 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,49 +54,93 @@ import org.json.JSONObject
  * 这里保留旧名是为了让 14 个屏幕文件不用逐个改、也不会漏掉某一处硬编码。
  * 新代码请直接用 MnemeTokens 的 Material 3 语义槽位。
  */
+/**
+ * 旧色名别名。真值在 ThemeTokens.kt（由 design/tokens.json 生成）；
+ * 用 getter 委托到动态色板，切亮/暗主题时 14 个屏幕文件不必改一行。
+ */
 object MnemeColors {
-    val Bg = MnemeTokens.Background
-    val Panel = MnemeTokens.SurfaceContainerLow
-    val PanelAlt = MnemeTokens.SurfaceContainer
-    val Text = MnemeTokens.OnSurface
-    val TextDim = MnemeTokens.OnSurfaceVariant
-    val Accent = MnemeTokens.Primary
-    val Divider = MnemeTokens.OutlineVariant
-    val Danger = MnemeTokens.Error
-    val Warn = MnemeTokens.Warning
-    val Ok = MnemeTokens.Success
+    val Bg get() = MnemePalette.Background
+    val Panel get() = MnemePalette.SurfaceContainerLow
+    val PanelAlt get() = MnemePalette.SurfaceContainer
+    val Text get() = MnemePalette.OnSurface
+    val TextDim get() = MnemePalette.OnSurfaceVariant
+    val Accent get() = MnemePalette.Primary
+    val Divider get() = MnemePalette.OutlineVariant
+    val Danger get() = MnemePalette.Error
+    val Warn get() = MnemePalette.Warning
+    val Ok get() = MnemePalette.Success
+}
+
+/** 外观偏好：system / light / dark。改动会触发全局重组。 */
+object MnemeAppearance {
+    private val state = mutableStateOf("system")
+    var mode: String
+        get() = state.value
+        set(v) { state.value = v }
 }
 
 private val DarkScheme = darkColorScheme(
-    primary = MnemeTokens.Primary,
-    onPrimary = MnemeTokens.OnPrimary,
-    primaryContainer = MnemeTokens.PrimaryContainer,
-    onPrimaryContainer = MnemeTokens.OnPrimaryContainer,
-    inversePrimary = MnemeTokens.InversePrimary,
-    secondary = MnemeTokens.Secondary,
-    onSecondary = MnemeTokens.OnSecondary,
-    secondaryContainer = MnemeTokens.SecondaryContainer,
-    onSecondaryContainer = MnemeTokens.OnSecondaryContainer,
-    tertiary = MnemeTokens.Tertiary,
-    onTertiary = MnemeTokens.OnTertiary,
-    tertiaryContainer = MnemeTokens.SuccessContainer,
-    onTertiaryContainer = MnemeTokens.OnSurface,
-    background = MnemeTokens.Background,
-    onBackground = MnemeTokens.OnBackground,
-    surface = MnemeTokens.Surface,
-    onSurface = MnemeTokens.OnSurface,
-    surfaceVariant = MnemeTokens.SurfaceVariant,
-    onSurfaceVariant = MnemeTokens.OnSurfaceVariant,
-    surfaceTint = MnemeTokens.Primary,
-    inverseSurface = MnemeTokens.InverseSurface,
-    inverseOnSurface = MnemeTokens.InverseOnSurface,
-    error = MnemeTokens.Error,
-    onError = MnemeTokens.OnError,
-    errorContainer = MnemeTokens.ErrorContainer,
-    onErrorContainer = MnemeTokens.OnErrorContainer,
-    outline = MnemeTokens.Outline,
-    outlineVariant = MnemeTokens.OutlineVariant,
-    scrim = MnemeTokens.Scrim,
+    primary = MnemeTokens.Dark.Primary,
+    onPrimary = MnemeTokens.Dark.OnPrimary,
+    primaryContainer = MnemeTokens.Dark.PrimaryContainer,
+    onPrimaryContainer = MnemeTokens.Dark.OnPrimaryContainer,
+    inversePrimary = MnemeTokens.Dark.InversePrimary,
+    secondary = MnemeTokens.Dark.Secondary,
+    onSecondary = MnemeTokens.Dark.OnSecondary,
+    secondaryContainer = MnemeTokens.Dark.SecondaryContainer,
+    onSecondaryContainer = MnemeTokens.Dark.OnSecondaryContainer,
+    tertiary = MnemeTokens.Dark.Tertiary,
+    onTertiary = MnemeTokens.Dark.OnTertiary,
+    tertiaryContainer = MnemeTokens.Dark.SuccessContainer,
+    onTertiaryContainer = MnemeTokens.Dark.OnSurface,
+    background = MnemeTokens.Dark.Background,
+    onBackground = MnemeTokens.Dark.OnBackground,
+    surface = MnemeTokens.Dark.Surface,
+    onSurface = MnemeTokens.Dark.OnSurface,
+    surfaceVariant = MnemeTokens.Dark.SurfaceVariant,
+    onSurfaceVariant = MnemeTokens.Dark.OnSurfaceVariant,
+    surfaceTint = MnemeTokens.Dark.Primary,
+    inverseSurface = MnemeTokens.Dark.InverseSurface,
+    inverseOnSurface = MnemeTokens.Dark.InverseOnSurface,
+    error = MnemeTokens.Dark.Error,
+    onError = MnemeTokens.Dark.OnError,
+    errorContainer = MnemeTokens.Dark.ErrorContainer,
+    onErrorContainer = MnemeTokens.Dark.OnErrorContainer,
+    outline = MnemeTokens.Dark.Outline,
+    outlineVariant = MnemeTokens.Dark.OutlineVariant,
+    scrim = MnemeTokens.Dark.Scrim,
+)
+
+private val LightScheme = lightColorScheme(
+    primary = MnemeTokens.Light.Primary,
+    onPrimary = MnemeTokens.Light.OnPrimary,
+    primaryContainer = MnemeTokens.Light.PrimaryContainer,
+    onPrimaryContainer = MnemeTokens.Light.OnPrimaryContainer,
+    inversePrimary = MnemeTokens.Light.InversePrimary,
+    secondary = MnemeTokens.Light.Secondary,
+    onSecondary = MnemeTokens.Light.OnSecondary,
+    secondaryContainer = MnemeTokens.Light.SecondaryContainer,
+    onSecondaryContainer = MnemeTokens.Light.OnSecondaryContainer,
+    tertiary = MnemeTokens.Light.Tertiary,
+    onTertiary = MnemeTokens.Light.OnTertiary,
+    tertiaryContainer = MnemeTokens.Light.SuccessContainer,
+    onTertiaryContainer = MnemeTokens.Light.OnSurface,
+    background = MnemeTokens.Light.Background,
+    onBackground = MnemeTokens.Light.OnBackground,
+    surface = MnemeTokens.Light.Surface,
+    onSurface = MnemeTokens.Light.OnSurface,
+    surfaceVariant = MnemeTokens.Light.SurfaceVariant,
+    onSurfaceVariant = MnemeTokens.Light.OnSurfaceVariant,
+    surfaceTint = MnemeTokens.Light.Primary,
+    inverseSurface = MnemeTokens.Light.InverseSurface,
+    inverseOnSurface = MnemeTokens.Light.InverseOnSurface,
+    error = MnemeTokens.Light.Error,
+    onError = MnemeTokens.Light.OnError,
+    errorContainer = MnemeTokens.Light.ErrorContainer,
+    onErrorContainer = MnemeTokens.Light.OnErrorContainer,
+    outline = MnemeTokens.Light.Outline,
+    outlineVariant = MnemeTokens.Light.OutlineVariant,
+    scrim = MnemeTokens.Light.Scrim,
 )
 
 /** 字阶来自 tokens：与桌面 CSS 的 --type-* 一一对应。 */
@@ -141,8 +197,27 @@ private val MnemeShapes = Shapes(
 
 @Composable
 fun MnemeTheme(content: @Composable () -> Unit) {
+    val dark = when (MnemeAppearance.mode) {
+        "light" -> false
+        "dark" -> true
+        else -> isSystemInDarkTheme()
+    }
+    // 同步动态别名：值相同时 mutableStateOf 不会触发重组，切主题时才会。
+    MnemePalette.apply(!dark)
+    // 状态栏跟着主题走：theme.xml 只能给静态启动底色，运行中切换要靠这里。
+    val view = LocalView.current
+    val ctx = LocalContext.current
+    SideEffect {
+        var c: android.content.Context? = ctx
+        while (c is ContextWrapper && c !is Activity) c = c.baseContext
+        val window = (c as? Activity)?.window
+        if (window != null) {
+            window.statusBarColor = MnemePalette.Background.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !dark
+        }
+    }
     MaterialTheme(
-        colorScheme = DarkScheme,
+        colorScheme = if (dark) DarkScheme else LightScheme,
         typography = MnemeTypography,
         shapes = MnemeShapes,
         content = content,
@@ -189,8 +264,8 @@ fun Panel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(MnemeTokens.SurfaceContainerLow, RoundedCornerShape(MnemeTokens.Shape.L))
-            .border(1.dp, MnemeTokens.OutlineVariant, RoundedCornerShape(MnemeTokens.Shape.L))
+            .background(MnemePalette.SurfaceContainerLow, RoundedCornerShape(MnemeTokens.Shape.L))
+            .border(1.dp, MnemePalette.OutlineVariant, RoundedCornerShape(MnemeTokens.Shape.L))
             .padding(MnemeTokens.Space.M),
         verticalArrangement = Arrangement.spacedBy(MnemeTokens.Space.S),
     ) {
@@ -203,7 +278,7 @@ fun Panel(
 fun SectionTitle(text: String) {
     Text(
         text,
-        color = MnemeTokens.OnSurface,
+        color = MnemePalette.OnSurface,
         fontSize = MnemeTokens.Type.TitleMediumSize.sp,
         fontWeight = FontWeight.Medium,
     )
@@ -213,14 +288,14 @@ fun SectionTitle(text: String) {
 fun Dim(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
-        color = MnemeTokens.OnSurfaceVariant,
+        color = MnemePalette.OnSurfaceVariant,
         fontSize = MnemeTokens.Type.BodyMediumSize.sp,
         modifier = modifier,
     )
 }
 
 @Composable
-fun Badge(text: String, color: Color = MnemeTokens.Primary) {
+fun Badge(text: String, color: Color = MnemePalette.Primary) {
     Text(
         text,
         color = color,
@@ -236,11 +311,11 @@ fun Badge(text: String, color: Color = MnemeTokens.Primary) {
 fun ErrorBanner(message: String) {
     Text(
         "⚠ $message",
-        color = MnemeTokens.OnErrorContainer,
+        color = MnemePalette.OnErrorContainer,
         fontSize = MnemeTokens.Type.BodyMediumSize.sp,
         modifier = Modifier
             .fillMaxWidth()
-            .background(MnemeTokens.ErrorContainer, RoundedCornerShape(MnemeTokens.Shape.S))
+            .background(MnemePalette.ErrorContainer, RoundedCornerShape(MnemeTokens.Shape.S))
             .padding(MnemeTokens.Space.S),
     )
 }
@@ -254,7 +329,7 @@ fun LoadingBox() {
     ) {
         CircularProgressIndicator(
             modifier = Modifier.size(18.dp),
-            color = MnemeTokens.Primary,
+            color = MnemePalette.Primary,
             strokeWidth = 2.dp,
         )
         Dim("加载中…")
@@ -273,10 +348,10 @@ fun AccentButton(
         enabled = enabled,
         modifier = modifier,
         colors = ButtonDefaults.buttonColors(
-            containerColor = MnemeTokens.Primary,
-            contentColor = MnemeTokens.OnPrimary,
-            disabledContainerColor = MnemeTokens.SurfaceContainer,
-            disabledContentColor = MnemeTokens.OnSurfaceVariant.copy(alpha = MnemeTokens.Alpha.DisabledContent),
+            containerColor = MnemePalette.Primary,
+            contentColor = MnemePalette.OnPrimary,
+            disabledContainerColor = MnemePalette.SurfaceContainer,
+            disabledContentColor = MnemePalette.OnSurfaceVariant.copy(alpha = MnemeTokens.Alpha.DisabledContent),
         ),
     ) {
         Text(text, fontWeight = FontWeight.Medium, fontSize = MnemeTokens.Type.LabelLargeSize.sp)
@@ -294,10 +369,10 @@ fun GhostButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier,
-        border = BorderStroke(1.dp, MnemeTokens.Outline),
+        border = BorderStroke(1.dp, MnemePalette.Outline),
         colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = MnemeTokens.Primary,
-            disabledContentColor = MnemeTokens.OnSurfaceVariant.copy(alpha = MnemeTokens.Alpha.DisabledContent),
+            contentColor = MnemePalette.Primary,
+            disabledContentColor = MnemePalette.OnSurfaceVariant.copy(alpha = MnemeTokens.Alpha.DisabledContent),
         ),
     ) {
         Text(text, fontSize = MnemeTokens.Type.LabelLargeSize.sp)
@@ -320,7 +395,7 @@ fun MnemeTextField(
         label = {
             Text(
                 label,
-                color = MnemeTokens.OnSurfaceVariant,
+                color = MnemePalette.OnSurfaceVariant,
                 fontSize = MnemeTokens.Type.BodyMediumSize.sp,
             )
         },
@@ -329,16 +404,16 @@ fun MnemeTextField(
         maxLines = maxLines,
         shape = RoundedCornerShape(MnemeTokens.Shape.S),
         textStyle = LocalTextStyle.current.copy(
-            color = MnemeTokens.OnSurface,
+            color = MnemePalette.OnSurface,
             fontSize = MnemeTokens.Type.BodyLargeSize.sp,
         ),
         colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = MnemeTokens.Primary,
-            unfocusedBorderColor = MnemeTokens.Outline,
-            disabledBorderColor = MnemeTokens.OutlineVariant,
-            focusedLabelColor = MnemeTokens.Primary,
-            unfocusedLabelColor = MnemeTokens.OnSurfaceVariant,
-            cursorColor = MnemeTokens.Primary,
+            focusedBorderColor = MnemePalette.Primary,
+            unfocusedBorderColor = MnemePalette.Outline,
+            disabledBorderColor = MnemePalette.OutlineVariant,
+            focusedLabelColor = MnemePalette.Primary,
+            unfocusedLabelColor = MnemePalette.OnSurfaceVariant,
+            cursorColor = MnemePalette.Primary,
             focusedContainerColor = Color.Transparent,
             unfocusedContainerColor = Color.Transparent,
         ),
@@ -356,17 +431,39 @@ fun Receipt(obj: JSONObject, skipKeys: Set<String> = setOf("error")) {
             Row(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     k,
-                    color = MnemeTokens.OnSurfaceVariant,
+                    color = MnemePalette.OnSurfaceVariant,
                     fontSize = MnemeTokens.Type.BodyMediumSize.sp,
                     modifier = Modifier.width(104.dp),
                 )
                 Text(
                     obj.readable(k).ifBlank { "—" },
-                    color = MnemeTokens.OnSurface,
+                    color = MnemePalette.OnSurface,
                     fontSize = MnemeTokens.Type.BodyMediumSize.sp,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+        }
+    }
+}
+
+/** 外观设置：跟随系统 / 亮色 / 暗色，偏好写本机 SharedPreferences。 */
+@Composable
+fun AppearancePanel() {
+    val ctx = LocalContext.current
+    val sp = remember { ctx.getSharedPreferences("mneme_ui", Context.MODE_PRIVATE) }
+    Panel(title = "外观") {
+        Dim("切换即时生效，并记在本机；跟随系统会读 Android 的深色模式设置。")
+        Row(horizontalArrangement = Arrangement.spacedBy(MnemeTokens.Space.S)) {
+            listOf("system" to "跟随系统", "light" to "亮色", "dark" to "暗色").forEach { (value, label) ->
+                if (MnemeAppearance.mode == value) {
+                    AccentButton(label, onClick = {})
+                } else {
+                    GhostButton(label, onClick = {
+                        MnemeAppearance.mode = value
+                        sp.edit().putString("theme", value).apply()
+                    })
+                }
             }
         }
     }

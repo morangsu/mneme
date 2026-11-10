@@ -114,9 +114,22 @@ for (const file of ["web/desktop.css", "web/app.css"]) {
 }
 
 // 2) Kotlin 常量（Compose 侧唯一色值来源）
-const kt = ["package io.github.morangsu.mneme", "", "import androidx.compose.ui.graphics.Color", "import androidx.compose.ui.unit.dp", "", "/** 由 tools/gen-theme.mjs 从 design/tokens.json 生成，请勿手改。 */", "object MnemeTokens {"];
-for (const [k, v] of Object.entries(tokens.schemes.dark)) kt.push(`    val ${pascal(k)} = Color(${hexCompose(v)})`);
-kt.push("", "    object Shape {");
+//    Dark/Light 两套静态色 + MnemePalette 动态别名：14 个屏幕文件通过
+//    MnemeColors 读动态值，切主题时无需逐个改文件。
+const darkKeys = Object.keys(tokens.schemes.dark);
+const kt = [
+  "package io.github.morangsu.mneme", "",
+  "import androidx.compose.runtime.mutableStateOf",
+  "import androidx.compose.ui.graphics.Color",
+  "import androidx.compose.ui.unit.dp", "",
+  "/** 由 tools/gen-theme.mjs 从 design/tokens.json 生成，请勿手改。 */",
+  "object MnemeTokens {",
+  "    object Dark {",
+];
+for (const [k, v] of Object.entries(tokens.schemes.dark)) kt.push(`        val ${pascal(k)} = Color(${hexCompose(v)})`);
+kt.push("    }", "", "    object Light {");
+for (const [k, v] of Object.entries(tokens.schemes.light)) kt.push(`        val ${pascal(k)} = Color(${hexCompose(v)})`);
+kt.push("    }", "", "    object Shape {");
 for (const [k, v] of Object.entries(tokens.shape)) kt.push(`        val ${pascal(k)} = ${v}.dp`);
 kt.push("    }", "", "    object Space {");
 for (const [k, v] of Object.entries(tokens.spacing)) kt.push(`        val ${pascal(k)} = ${v}.dp`);
@@ -127,7 +140,21 @@ for (const [k, v] of Object.entries(tokens.type)) {
   kt.push(`        const val ${pascal(k)}Size = ${v.size}`);
   kt.push(`        const val ${pascal(k)}Line = ${v.line}`);
 }
-kt.push("    }", "}", "");
+kt.push("    }", "}", "",
+  "/** 当前主题的动态色板；MnemeColors 与共用组件都读这里，切主题会整体重组。 */",
+  "object MnemePalette {");
+for (const k of darkKeys) {
+  const P = pascal(k);
+  kt.push(`    private val _${k} = mutableStateOf(MnemeTokens.Dark.${P})`);
+  kt.push(`    var ${P}: Color`);
+  kt.push(`        get() = _${k}.value`);
+  kt.push(`        set(v) { _${k}.value = v }`);
+}
+kt.push("", "    fun apply(light: Boolean) {", "        if (light) {");
+for (const k of darkKeys) kt.push(`            ${pascal(k)} = MnemeTokens.Light.${pascal(k)}`);
+kt.push("        } else {");
+for (const k of darkKeys) kt.push(`            ${pascal(k)} = MnemeTokens.Dark.${pascal(k)}`);
+kt.push("        }", "    }", "}", "");
 const ktPath = path.join(root, "android/app/src/main/java/io/github/morangsu/mneme/ThemeTokens.kt");
 fs.writeFileSync(ktPath, kt.join("\n"), "utf8");
 console.log("  android/.../ThemeTokens.kt: 已生成");

@@ -289,3 +289,7 @@ code {
   table { font-size: var(--type-body-medium-size); }
   th, td { padding: var(--row-pad) var(--space-xs); }
 }
+
+/* 亮色时让原生滚动条/控件一起变浅，避免深色滚动条割裂 */
+body[data-theme="light"] { color-scheme: light; }
+body[data-theme="dark"] { color-scheme: dark; }

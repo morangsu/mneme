@@ -22,7 +22,10 @@ pub enum EntityChange {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Diff {
     pub changes: Vec<EntityChange>,
+    /// 需要人工裁决的冲突（会计入 SyncReport.conflicts）
     pub warnings: Vec<String>,
+    /// 已自动合并但值得用户知道的事（双端同字段都改过），不计入冲突数
+    pub notices: Vec<String>,
 }
 
 impl Diff {
@@ -47,6 +50,9 @@ impl Diff {
         }
         for w in &self.warnings {
             lines.push(format!("  ! {w}"));
+        }
+        for n in &self.notices {
+            lines.push(format!("  · {n}"));
         }
         lines.join("\n")
     }
@@ -153,6 +159,7 @@ pub fn three_way(
         .collect();
     let mut out = Vec::with_capacity(ids.len());
     let mut warnings = Vec::new();
+    let mut notices: Vec<String> = Vec::new();
     let mut conflicts: Vec<EntityChange> = Vec::new();
 
     for id in ids {
@@ -215,6 +222,14 @@ pub fn three_way(
                                 merged.fields.insert(k.clone(), v);
                             }
                         } else {
+                            // 两端都偏离基线且值不同 = 有一方的修改会被静默覆盖。
+                            // 合并结果不变（仍按 rev/时间取较新者），但要在同步回执里说清楚。
+                            if a != base_v && c != base_v {
+                                let winner = if newer(x, y).is_ge() { "本地" } else { "远端" };
+                                notices.push(format!(
+                                    "{id} 的字段 `{k}` 双端都修改过，已按 rev/时间取{winner}值，请确认"
+                                ));
+                            }
                             match pick {
                                 Some(v) => {
                                     merged.fields.insert(k.clone(), v);
@@ -240,6 +255,7 @@ pub fn three_way(
     out.sort_by(|a, b| a.id.cmp(&b.id));
     let mut diff = diff_entities(base, &out, schema);
     diff.warnings.extend(warnings);
+    diff.notices.extend(notices);
     diff.changes.extend(conflicts);
     Ok((out, diff))
 }
@@ -328,6 +344,21 @@ immutable=true
         let remote: Vec<Entity> = vec![];
         let (out, _) = three_way(&base, &local, &remote, &s, MergePolicy::default()).unwrap();
         assert_eq!(out.len(), 1, "远端整份没有不能推断删除");
+    }
+
+    #[test]
+    fn both_sides_changed_same_field_reports_notice() {
+        let s = schema();
+        let base = vec![e("a", "旧", "3g", 1, 1, "w")];
+        let local = vec![e("a", "本地功效", "3g", 2, 2, "w")];
+        let remote = vec![e("a", "远端功效", "3g", 3, 3, "p")];
+        let (out, diff) = three_way(&base, &local, &remote, &s, MergePolicy::default()).unwrap();
+        // 合并结果仍是 LWW（远端 rev 更大）
+        assert_eq!(out[0].get("effects").unwrap().display(), "远端功效");
+        // 但回执必须提示，且不能算成需要裁决的冲突
+        assert!(diff.notices.iter().any(|n| n.contains("effects") && n.contains("双端")));
+        assert!(diff.warnings.is_empty(), "普通字段双端改动不应计入 conflicts");
+        assert!(diff.summary().contains("双端"), "SyncReport 文本应带提示");
     }
 
     #[test]

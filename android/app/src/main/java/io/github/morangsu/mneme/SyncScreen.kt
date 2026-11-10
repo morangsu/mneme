@@ -79,7 +79,10 @@ fun SyncScreen(onGoConflict: () -> Unit) {
         if (busy) LoadingBox()
         error?.let { ErrorBanner(it) }
 
-        // ---- 0. 连接配置（首次必须填一次） ----
+        // ---- 0. 外观（亮色 / 暗色 / 跟随系统） ----
+        AppearancePanel()
+
+        // ---- 1. 连接配置（首次必须填一次） ----
         SyncSettingsPanel(onSaved = {
             scope.launch {
                 val s = Api.upstreamStatus()

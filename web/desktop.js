@@ -252,6 +252,21 @@ function move(delta) {
 
 document.addEventListener('keydown', (e) => {
   const typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+  if (Q.active) {
+    if (e.key === 'Escape') { e.preventDefault(); exitQuiz(); return; }
+    if (typing) return;
+    if (e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      if (!Q.revealed) revealQuiz();
+      return;
+    }
+    if (['1', '2', '3', '4'].includes(e.key) && Q.revealed) {
+      e.preventDefault();
+      gradeQuiz(Number(e.key));
+      return;
+    }
+    return; // 复习模式屏蔽矩阵快捷键，避免误改数据
+  }
   if (e.key === '/' && !typing) {
     e.preventDefault();
     $('q').focus();
@@ -418,3 +433,143 @@ async function openCreate() {
     apply(document.body.dataset.density === 'compact' ? 'comfortable' : 'compact');
   });
 })();
+
+// ---- 明暗主题：与手机端共用同一套 M3 语义色，偏好记在本机 -------------
+(function initTheme() {
+  const btn = $('theme');
+  if (!btn) return;
+  const apply = (v) => {
+    document.body.dataset.theme = v;
+    btn.textContent = v === 'light' ? '暗色' : '亮色';
+    btn.title = v === 'light' ? '切换到暗色主题' : '切换到亮色主题';
+    try { localStorage.setItem('mneme.theme', v); } catch (_) {}
+  };
+  const forced = new URLSearchParams(location.search).get('theme');
+  let saved = forced || 'dark';
+  if (!forced) {
+    try { saved = localStorage.getItem('mneme.theme') || 'dark'; } catch (_) {}
+  }
+  apply(saved === 'light' ? 'light' : 'dark');
+  btn.addEventListener('click', () => {
+    apply(document.body.dataset.theme === 'light' ? 'dark' : 'light');
+  });
+})();
+
+// ---- 复习模式：题面 / 答案 / 四档评分全部走 Rust 侧 /api/quiz* -----------
+// 业务规则（到期判定、SM2、判分口径）一律不在这里重写，与手机端同源。
+const Q = { active: false, cards: [], idx: 0, due: 0, revealed: false, busy: false };
+const GRADE_LABEL = { 1: '忘了', 2: '困难', 3: '良好', 4: '简单' };
+
+function showQuizPane(on) {
+  Q.active = on;
+  $('quiz-pane').hidden = !on;
+  document.querySelector('main').style.display = on ? 'none' : '';
+}
+
+async function startQuiz() {
+  showQuizPane(true);
+  Q.cards = []; Q.idx = 0; Q.revealed = false;
+  await loadQuizCards();
+}
+
+function exitQuiz() {
+  showQuizPane(false);
+  Q.busy = false;
+}
+
+async function loadQuizCards() {
+  $('quiz-note').textContent = '取题中…';
+  const r = await api('/api/quiz?limit=10');
+  if (r.error) {
+    $('quiz-note').textContent = '错误：' + r.error;
+    Q.cards = [];
+    renderQuiz();
+    return;
+  }
+  Q.cards = r.cards || [];
+  Q.due = r.due || 0;
+  Q.idx = 0;
+  Q.revealed = false;
+  renderQuiz();
+  $('quiz-note').textContent = Q.cards.length ? '' : '今天没有待复习卡片。';
+}
+
+function renderQuiz() {
+  const c = Q.cards[Q.idx];
+  $('quiz-progress').textContent = Q.cards.length
+    ? `今日 ${Q.due} 张 · 第 ${Q.idx + 1}/${Q.cards.length} 张`
+    : `今日 ${Q.due} 张`;
+  $('quiz-dir').textContent = c ? (c.direction ? '方向：' + c.direction : '反向卡') : '';
+  $('quiz-prompt').textContent = c ? c.prompt : '没有待复习卡片';
+  $('quiz-answer').hidden = true;
+  $('quiz-answer').innerHTML = '';
+  $('quiz-reveal').hidden = !c || Q.revealed;
+  $('quiz-reveal').disabled = !c;
+  $('quiz-grades').hidden = !c || !Q.revealed;
+}
+
+function asText(v) {
+  if (Array.isArray(v)) return v.filter(Boolean).join(' / ');
+  if (v == null) return '';
+  const t = String(v).trim();
+  return t === '[]' ? '' : t;
+}
+
+async function revealQuiz() {
+  const c = Q.cards[Q.idx];
+  if (!c || Q.revealed || Q.busy) return;
+  Q.busy = true;
+  $('quiz-note').textContent = '读取答案…';
+  const r = await api('/api/quiz/answer/' + encodeURIComponent(c.id));
+  Q.busy = false;
+  if (r.error) { $('quiz-note').textContent = '错误：' + r.error; return; }
+  const lines = [`<div>${esc(r.answer || '')}</div>`];
+  const accept = asText(r.accept);
+  const boundary = asText(r.boundary);
+  if (accept) lines.push(`<div class="accept">可接受：${esc(accept)}</div>`);
+  if (boundary) lines.push(`<div class="accept">边界：${esc(boundary)}</div>`);
+  $('quiz-answer').innerHTML = lines.join('');
+  $('quiz-answer').hidden = false;
+  Q.revealed = true;
+  $('quiz-reveal').hidden = true;
+  $('quiz-grades').hidden = false;
+  $('quiz-note').textContent = '按 1-4 评分';
+}
+
+async function gradeQuiz(g) {
+  const c = Q.cards[Q.idx];
+  if (!c || !Q.revealed || Q.busy) return;
+  Q.busy = true;
+  $('quiz-note').textContent = '记录中…';
+  const r = await api('/api/review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ card_id: c.id, grade: g }),
+  });
+  Q.busy = false;
+  if (r.error) { $('quiz-note').textContent = '错误：' + r.error; return; }
+  Q.revealed = false;
+  Q.idx++;
+  const note = `已记录：${GRADE_LABEL[g]}`;
+  if (Q.idx >= Q.cards.length) {
+    await loadQuizCards();
+    $('quiz-note').textContent = note + ' · 本轮完成';
+  } else {
+    $('quiz-note').textContent = note;
+    renderQuiz();
+  }
+}
+
+$('quiz-toggle').addEventListener('click', startQuiz);
+$('quiz-exit').addEventListener('click', exitQuiz);
+$('quiz-reveal').addEventListener('click', revealQuiz);
+document.querySelectorAll('#quiz-grades button[data-grade]').forEach((b) => {
+  b.addEventListener('click', () => gradeQuiz(Number(b.dataset.grade)));
+});
+// 深链：?quiz=1 直接进复习，便于分享与无头截图验证
+{
+  const qp = new URLSearchParams(location.search);
+  if (qp.get('quiz') === '1') {
+    startQuiz().then(() => { if (qp.get('reveal') === '1') revealQuiz(); });
+  }
+}

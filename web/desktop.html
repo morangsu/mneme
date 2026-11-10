@@ -10,6 +10,8 @@
   <h1>mneme<span class="muted" id="state"></span></h1>
   <div class="hint">
     <kbd>/</kbd>检索 <kbd>j/k</kbd>移动 <kbd>Enter</kbd>详情 <kbd>[ ]</kbd>切视图 <kbd>Ctrl+Enter</kbd>保存 <kbd>Esc</kbd>收起
+    <button id="quiz-toggle" class="ghost" title="进入复习（空格翻面 / 1-4 评分 / Esc 退出）">复习</button>
+    <button id="theme" class="ghost" title="切换亮色/暗色主题">亮色</button>
     <button id="density" class="ghost" title="切换紧凑/舒适密度">紧凑</button>
     <button id="create" class="ghost">＋ 新建</button>
   </div>
@@ -50,6 +52,33 @@
     <div class="muted">选择一条（Enter 或点击）查看详情</div>
   </aside>
 </main>
+
+<section id="quiz-pane" hidden>
+  <div class="quiz-shell">
+    <div class="quiz-head">
+      <h2>复习</h2>
+      <span class="muted" id="quiz-progress">今日 0 张</span>
+      <span class="spacer"></span>
+      <span class="muted"><kbd>空格</kbd>翻面 <kbd>1-4</kbd>评分 <kbd>Esc</kbd>退出</span>
+      <button id="quiz-exit" class="ghost">退出</button>
+    </div>
+    <div class="quiz-card">
+      <div class="muted" id="quiz-dir"></div>
+      <div id="quiz-prompt"></div>
+      <div id="quiz-answer" hidden></div>
+    </div>
+    <div class="quiz-actions">
+      <button id="quiz-reveal">显示答案（空格）</button>
+      <div id="quiz-grades" hidden>
+        <button data-grade="1" class="ghost">1 · 忘了</button>
+        <button data-grade="2" class="ghost">2 · 困难</button>
+        <button data-grade="3" class="ghost">3 · 良好</button>
+        <button data-grade="4" class="ghost">4 · 简单</button>
+      </div>
+    </div>
+    <div class="muted" id="quiz-note"></div>
+  </div>
+</section>
 
 <script src="/desktop.js"></script>
 </body>

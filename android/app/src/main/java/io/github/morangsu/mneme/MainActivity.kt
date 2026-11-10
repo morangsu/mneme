@@ -45,6 +45,10 @@ class MainActivity : ComponentActivity() {
         // 后台周期同步：联网时每小时跑一次，唯一任务避免重复堆叠。
         enqueueSyncWorker()
 
+        // 外观偏好先于组合恢复，避免首帧闪一下暗色。
+        MnemeAppearance.mode = getSharedPreferences("mneme_ui", MODE_PRIVATE)
+            .getString("theme", "system") ?: "system"
+
         setContent {
             MnemeTheme {
                 MnemeApp()

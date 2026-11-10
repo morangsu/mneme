@@ -198,3 +198,24 @@ document.querySelectorAll('header nav a').forEach(a => {
 });
 
 boot();
+
+// ---- 明暗主题：与手机端共用同一套 M3 语义色，偏好记在本机 -------------
+(function initTheme() {
+  const btn = $('theme');
+  if (!btn) return;
+  const apply = (v) => {
+    document.body.dataset.theme = v;
+    btn.textContent = v === 'light' ? '暗色' : '亮色';
+    btn.title = v === 'light' ? '切换到暗色主题' : '切换到亮色主题';
+    try { localStorage.setItem('mneme.theme', v); } catch (_) {}
+  };
+  const forced = new URLSearchParams(location.search).get('theme');
+  let saved = forced || 'dark';
+  if (!forced) {
+    try { saved = localStorage.getItem('mneme.theme') || 'dark'; } catch (_) {}
+  }
+  apply(saved === 'light' ? 'light' : 'dark');
+  btn.addEventListener('click', () => {
+    apply(document.body.dataset.theme === 'light' ? 'dark' : 'light');
+  });
+})();

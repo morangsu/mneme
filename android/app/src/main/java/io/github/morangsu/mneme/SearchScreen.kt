@@ -98,7 +98,7 @@ fun SearchScreen(onDismiss: () -> Unit, onOpen: (String) -> Unit) {
                         label = {
                             Text(
                                 "搜索药名 / 功效 / 性味 / 别名（可用拼音首字母 mh）",
-                                color = MnemeTokens.OnSurfaceVariant,
+                                color = MnemePalette.OnSurfaceVariant,
                                 fontSize = MnemeTokens.Type.BodyMediumSize.sp,
                             )
                         },
@@ -106,15 +106,15 @@ fun SearchScreen(onDismiss: () -> Unit, onOpen: (String) -> Unit) {
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(MnemeTokens.Shape.S),
                         textStyle = LocalTextStyle.current.copy(
-                            color = MnemeTokens.OnSurface,
+                            color = MnemePalette.OnSurface,
                             fontSize = MnemeTokens.Type.TitleMediumSize.sp,
                         ),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MnemeTokens.Primary,
-                            unfocusedBorderColor = MnemeTokens.Outline,
-                            focusedLabelColor = MnemeTokens.Primary,
-                            unfocusedLabelColor = MnemeTokens.OnSurfaceVariant,
-                            cursorColor = MnemeTokens.Primary,
+                            focusedBorderColor = MnemePalette.Primary,
+                            unfocusedBorderColor = MnemePalette.Outline,
+                            focusedLabelColor = MnemePalette.Primary,
+                            unfocusedLabelColor = MnemePalette.OnSurfaceVariant,
+                            cursorColor = MnemePalette.Primary,
                         ),
                     )
                 }
