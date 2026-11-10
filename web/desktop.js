@@ -1099,24 +1099,30 @@ async function pasteCreate() {
     `新建 ${(r.created || []).length} 条 / 跳过 ${(r.skipped || []).length} 条 / 失败 ${(r.failed || []).length} 条`);
 }
 
-// ---- 截图识字：本地 PP-OCRv4 推理（/api/ocr），识别结果可送进批量粘贴 ----
+// ---- 截图识字：本地 PP-OCRv4 推理（/api/ocr），识别→解析→建条一条龙 ----
 async function renderOcr() {
-  T.data = { ocrReady: null };
+  T.data = { ocrReady: null, blocks: [] };
   toolBody(`<div class="tool-card"><h3>截图识字（本地推理，图片不上传）</h3>
     <div id="t-ocr-drop" class="ocr-drop">选图片，截图后直接 <kbd>Ctrl+V</kbd> 粘贴，或把图片拖到这里</div>
     <input type="file" id="t-ocr-file" accept="image/*" style="display:none" />
-    <textarea id="t-ocr-out" placeholder="识别结果（可手工修正）" style="min-height:120px"></textarea>
+    <div class="tool-row"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="t-ocr-angle" /> 旋转文本（倒转的图才需要，多花一次分类推理）</label></div>
+    <textarea id="t-ocr-out" placeholder="识别结果（可手工修正，改完点「重新解析」）" style="min-height:110px"></textarea>
     <div class="tool-row">
       <button data-act="ocr-pick" class="ghost">选择图片</button>
-      <button data-act="ocr-run">重新识别</button>
-      <button data-act="ocr-to-paste">送到批量粘贴</button>
-    </div></div>`);
+      <button data-act="ocr-run" class="ghost">重新识别</button>
+      <button data-act="ocr-parse">重新解析</button>
+      <button data-act="ocr-create">一键新建（自动跳过重复）</button>
+      <button data-act="ocr-to-paste" class="ghost">送到批量粘贴</button>
+    </div>
+    <div id="t-list" class="tool-list"></div></div>`);
   const info = await api('/api/ocr/info');
   T.data.ocrReady = !!info.ready;
+  const tpl = await api('/api/template');
+  T.data.kind = tpl.kind || '';
   if (!info.ready) {
     toolNote('OCR 未就绪：' + (info.error || info.hint || '缺少模型'), true);
   } else {
-    toolNote('已就绪（模型：' + (info.dir || '?') + '）— 粘贴或选择图片即识别');
+    toolNote('已就绪（模型：' + (info.dir || '?') + '）— 粘贴或选择图片即识别并解析');
   }
   $('t-ocr-drop').addEventListener('click', () => $('t-ocr-file').click());
   $('t-ocr-file').addEventListener('change', () => {
@@ -1152,11 +1158,51 @@ async function ocrFile(file) {
   toolNote('识别中…');
   const r = await api('/api/ocr', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ b64 }),
+    body: JSON.stringify({ b64, angle: $('t-ocr-angle')?.checked || false }),
   });
   if (r.error) return toolNote('错误：' + r.error, true);
   $('t-ocr-out').value = r.text || '';
-  toolNote(`识别完成（${r.lines?.length || 0} 行，${r.ms ?? '?'} ms）——可手工修正后送批量粘贴`);
+  await ocrParse();
+  toolNote(`识别完成（${r.lines?.length || 0} 行，${r.ms ?? '?'} ms）`);
+}
+
+// 识别文本 → 模板字段块预览（与批量粘贴同一套 parse 规则，只做展示不落库）
+async function ocrParse() {
+  const text = $('t-ocr-out').value;
+  if (!text.trim()) { T.data.blocks = []; $('t-list').innerHTML = ''; return 0; }
+  const r = await api('/api/parse-paste', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, kind: T.data.kind }),
+  });
+  if (r.error) return toolNote('解析错误：' + r.error, true);
+  T.data.blocks = r.blocks || [];
+  renderOcrBlocks();
+  return T.data.blocks.length;
+}
+
+function renderOcrBlocks() {
+  const blocks = T.data.blocks || [];
+  $('t-list').innerHTML = blocks.length ? blocks.map((b) => {
+    const flds = Object.entries(b.fields || {}).map(([k, v]) => `${k}=${v}`).join('；');
+    const unk = b.unknown?.length ? `<span class="tag">未识别 ${b.unknown.length} 行</span>` : '';
+    return `<div class="tool-item"><span class="grow"><b>第 ${b.index + 1} 条 · 命中 ${b.matched} 字段</b> ${unk}
+      <div class="snip">${esc(flds || '（空）')}</div></span></div>`;
+  }).join('') : '<div class="muted">没有解析出条目（识别文本需形如「功效：发汗解表」的 字段名：值 行，空行分隔多条）</div>';
+}
+
+async function ocrCreate() {
+  if (!T.data.blocks?.length) return toolNote('先识别或解析出条目', true);
+  toolNote('新建中…');
+  const r = await api('/api/create-batch', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: T.data.kind, items: T.data.blocks.map((b) => ({ fields: b.fields })) }),
+  });
+  if (r.error) return toolNote('错误：' + r.error, true);
+  const parts = [`新建 ${(r.created || []).length} 条`];
+  if ((r.skipped || []).length) parts.push(`跳过重复 ${(r.skipped || []).length} 条（${r.skipped.map((x) => x.name).join('、')}）`);
+  if ((r.failed || []).length) parts.push(`失败 ${(r.failed || []).length} 条`);
+  toolNote(parts.join(' / '), (r.failed || []).length > 0);
+  await boot();
 }
 
 async function ocrToPaste() {
@@ -1166,6 +1212,17 @@ async function ocrToPaste() {
   const el = $('t-paste');
   if (el) el.value = text;
 }
+
+// 全局热键（壳层 Ctrl+Alt+O 剪贴板识字）识别完成后从 Rust 侧调用：
+// 打开识字面板、填入文本、自动解析建条预览。
+window.__mnemeOcrText = async (text) => {
+  if (Q.active) exitQuiz();
+  await openTool('ocr');
+  const el = $('t-ocr-out');
+  if (!el) return;
+  el.value = text || '';
+  await ocrParse();
+};
 
 async function renderHistory(id) {
   toolBody(`<div class="tool-card"><h3>${esc(id || '')} 的变更历史</h3><div id="t-list" class="tool-list"></div></div>`);
@@ -1277,6 +1334,8 @@ $('tool-body').addEventListener('click', async (e) => {
     else if (act === 'paste-create') await pasteCreate();
     else if (act === 'ocr-pick') $('t-ocr-file')?.click();
     else if (act === 'ocr-run') T.data?.ocrFile ? ocrFile(T.data.ocrFile) : toolNote('先选图或粘贴截图', true);
+    else if (act === 'ocr-parse') await ocrParse();
+    else if (act === 'ocr-create') await ocrCreate();
     else if (act === 'ocr-to-paste') await ocrToPaste();
     else if (act === 'up-pull') await upPull();
     else if (act === 'up-suggest') {

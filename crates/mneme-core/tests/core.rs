@@ -511,6 +511,26 @@ fn paste_batch_single_block_works() {
     assert_eq!(b.skipped_blocks, 0);
 }
 
+#[test]
+fn paste_bare_title_line_becomes_primary() {
+    // 词条截图的标题行就是光秃秃的「薄荷」——没有标签也应成为主键
+    let p = parse_paste("薄荷\n功效：疏散风热\n性味：辛，凉", &materia(), "herb");
+    assert_eq!(p.fields.get("name").map(String::as_str), Some("薄荷"));
+    assert!(p.unknown.is_empty(), "{:?}", p.unknown);
+    // 提升要可解释：hits 里有「药名 ← 薄荷」，line=0 标记标题行提升
+    let hit = p.hits.iter().find(|h| h.key == "name").expect("name hit");
+    assert_eq!(hit.value, "薄荷");
+    assert_eq!(hit.line, 0);
+    // 已有显式主键时不抢
+    let p2 = parse_paste("药名：麻黄\n发汗力强", &materia(), "herb");
+    assert_eq!(p2.fields.get("name").map(String::as_str), Some("麻黄"));
+    assert_eq!(p2.unknown, vec!["发汗力强".to_string()]);
+    // 长句不是标题，留在 unknown（这正是「用户随手备注」的形状）
+    let p3 = parse_paste("完全没有标签的一段话", &materia(), "herb");
+    assert!(p3.fields.get("name").is_none());
+    assert_eq!(p3.unknown.len(), 1);
+}
+
 // ---- 多级分组 ----
 
 fn grp(id: &str, name: &str, parent: Option<&str>) -> mneme_core::Group {

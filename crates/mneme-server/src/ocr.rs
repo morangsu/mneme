@@ -7,7 +7,10 @@
 //! - ort 必须以 load-dynamic 方式运行：构建期不联网，运行时显式加载
 //!   `<模型目录>/onnxruntime.dll`（EnvironmentBuilder::with_dynamic_library_from_path，
 //!   必须在任何 Session 创建前 commit，所以惰性初始化里第一件事就是它）。
-//! - 推理是 CPU 密集（几百 ms~秒级），走 spawn_blocking，不卡 axum 运行时。
+//! - 推理是 CPU 密集（几百 ms~秒级），走 spawn_blocking，不卡 axum 运行时；
+//!   桌面壳的全局热键（截图识字）也调同一份 [`ocr_bytes_blocking`]。
+//! - 长图（>2000px 高）自动按 2000px+120px 重叠切片逐块识别再按序拼接：
+//!   det 的 limit_side_len=min 模式会把大图按短边归一，整页长图直接缩没字。
 
 use base64::Engine;
 use paddle_ocr_rs::ocr_lite::OcrLite;
@@ -139,6 +142,90 @@ pub fn ocr_info(data_root: &Path) -> JsonValue {
 pub struct OcrBody {
     /// base64 编码的图片字节（PNG/JPEG/BMP/WebP），前端 FileReader 读 dataURL 后去前缀。
     pub b64: String,
+    /// 是否跑方向分类（截图基本不倒转，默认关省一次推理）。
+    #[serde(default)]
+    pub angle: bool,
+}
+
+/// 一次识别的结果：整段文本 + 逐行（文本, 置信度）+ 耗时。
+pub struct OcrOutcome {
+    pub text: String,
+    pub lines: Vec<(String, f32)>,
+    pub ms: u64,
+}
+
+/// 阻塞式识别入口：HTTP 路由与桌面壳的全局热键共用这一份。
+/// 调用方负责放到不阻塞 UI/异步运行时的线程里。
+pub fn ocr_bytes_blocking(data_root: &Path, bytes: &[u8], do_angle: bool) -> Result<OcrOutcome, String> {
+    if bytes.len() > 20 * 1024 * 1024 {
+        return Err("图片超过 20MB".into());
+    }
+    ensure_engine(data_root)?;
+    let img = image::load_from_memory(bytes)
+        .map_err(|e| format!("图片解码失败: {e}"))?
+        .to_rgb8();
+    // 小图放大：PP-OCR 检测对 <30px 高的行基本失明；放大到合理尺寸再进模型。
+    let (w, h) = (img.width(), img.height());
+    let img = if h < 32 && h > 0 {
+        let scale = (96.0 / h as f32).min(4.0);
+        image::imageops::resize(
+            &img,
+            ((w as f32) * scale).max(1.0) as u32,
+            ((h as f32) * scale).max(1.0) as u32,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        img
+    };
+    let t0 = std::time::Instant::now();
+    // 长图分块：det 的 limit_side_len=736(min) 会把大图按短边归一，
+    // 900x5000 的整页笔记缩完文字只有几个像素高，整页必掉行。
+    // 按高 2000px + 120px 重叠切片逐块识别再按序拼接，块内顺序由检测器保证。
+    const SLICE_H: u32 = 2000;
+    const OVERLAP: u32 = 120;
+    let mut outcome = OcrOutcome { text: String::new(), lines: Vec::new(), ms: 0 };
+    let slices: Vec<image::RgbImage> = if img.height() > SLICE_H + OVERLAP {
+        let mut v = Vec::new();
+        let mut top = 0u32;
+        while top < img.height() {
+            let bottom = (top + SLICE_H).min(img.height());
+            v.push(image::imageops::crop_imm(&img, 0, top, img.width(), bottom - top).to_image());
+            if bottom >= img.height() {
+                break;
+            }
+            top = bottom - OVERLAP;
+        }
+        v
+    } else {
+        vec![img]
+    };
+    for (i, slice) in slices.iter().enumerate() {
+        let part = detect_one(slice, do_angle)?;
+        if i > 0 {
+            outcome.text.push('\n');
+        }
+        outcome.text.push_str(&part.text);
+        outcome.lines.extend(part.lines);
+    }
+    outcome.ms = t0.elapsed().as_millis() as u64;
+    Ok(outcome)
+}
+
+/// 单块推理。参数与 RapidOCR 默认一致：padding 50 / 最长边 2000 / 置信度 0.5 / 阈值 0.3 / 膨胀 1.6。
+fn detect_one(img: &image::RgbImage, do_angle: bool) -> Result<OcrOutcome, String> {
+    let mut guard = OCR.lock().map_err(|_| "OCR 锁中毒".to_string())?;
+    let Some(ocr) = guard.as_mut() else {
+        return Err("OCR 未初始化".into());
+    };
+    let res = ocr
+        .detect(img, 50, 2000, 0.5, 0.3, 1.6, do_angle, false)
+        .map_err(|e| format!("识别失败: {e}"))?;
+    // 文本块已是检测顺序（上→下、行内左→右）。
+    Ok(OcrOutcome {
+        text: res.text_blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n"),
+        lines: res.text_blocks.iter().map(|b| (b.text.clone(), b.text_score)).collect(),
+        ms: 0,
+    })
 }
 
 /// POST /api/ocr —— 识别图片文字，返回按阅读顺序拼好的文本与逐行明细。
@@ -150,54 +237,16 @@ pub async fn ocr_run(
         Ok(b) => b,
         Err(e) => return json!({ "error": format!("base64 解码失败: {e}") }),
     };
-    if bytes.len() > 20 * 1024 * 1024 {
-        return json!({ "error": "图片超过 20MB" });
-    }
+    let angle = body.angle;
     let root = data_root.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        if let Err(msg) = ensure_engine(&root) {
-            return json!({ "error": msg });
-        }
-        let img = match image::load_from_memory(&bytes) {
-            Ok(i) => i.to_rgb8(),
-            Err(e) => return json!({ "error": format!("图片解码失败: {e}") }),
-        };
-        // 小图放大：PP-OCR 检测对 <30px 高的行基本失明；放大到合理尺寸再进模型。
-        let (w, h) = (img.width(), img.height());
-        let img = if h < 32 && h > 0 {
-            let scale = (96.0 / h as f32).min(4.0);
-            image::imageops::resize(
-                &img,
-                ((w as f32) * scale).max(1.0) as u32,
-                ((h as f32) * scale).max(1.0) as u32,
-                image::imageops::FilterType::Triangle,
-            )
-        } else {
-            img
-        };
-        let mut guard = OCR.lock().unwrap();
-        let Some(ocr) = guard.as_mut() else {
-            return json!({ "error": "OCR 未初始化" });
-        };
-        let t0 = std::time::Instant::now();
-        // 参数与 RapidOCR 默认一致：padding 50 / 最长边 2000 / 置信度 0.5 / 阈值 0.3 / 膨胀 1.6。
-        // do_angle=false：截图录入场景文本基本不倒转，省一次分类推理。
-        let res = match ocr.detect(&img, 50, 2000, 0.5, 0.3, 1.6, false, false) {
-            Ok(r) => r,
-            Err(e) => return json!({ "error": format!("识别失败: {e}") }),
-        };
-        let lines: Vec<JsonValue> = res
-            .text_blocks
-            .iter()
-            .map(|b| json!({ "text": b.text, "score": b.text_score }))
-            .collect();
-        // 文本块已是检测顺序（上→下、行内左→右）；逐行拼接，空行隔开段落感。
-        let text = res.text_blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
-        json!({ "text": text, "lines": lines, "ms": t0.elapsed().as_millis() as u64 })
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || ocr_bytes_blocking(&root, &bytes, angle)).await;
     match result {
-        Ok(v) => v,
+        Ok(Ok(o)) => json!({
+            "text": o.text,
+            "lines": o.lines.iter().map(|(t, s)| json!({ "text": t, "score": s })).collect::<Vec<_>>(),
+            "ms": o.ms,
+        }),
+        Ok(Err(msg)) => json!({ "error": msg }),
         Err(e) => json!({ "error": format!("OCR 线程异常: {e}") }),
     }
 }

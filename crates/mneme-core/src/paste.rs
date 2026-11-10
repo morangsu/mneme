@@ -20,7 +20,7 @@ pub struct PasteHit {
     /// 字段中文名（用于回显「已识别：功效」）
     pub label: String,
     pub value: String,
-    /// 原始行号（从 1 开始），方便用户对着原文核对
+    /// 原始行号（从 1 开始），方便用户对着原文核对；0 表示标题行提升（见 promote_primary_from_unknown）
     pub line: usize,
 }
 
@@ -164,7 +164,39 @@ pub fn parse_paste(text: &str, schema: &DomainSchema, kind: &str) -> PasteParse 
             None => out.unknown.push(line.to_string()),
         }
     }
+    promote_primary_from_unknown(&mut out, schema, kind);
     out
+}
+
+/// 缺主键时，把第一条「纯文本短行」提升为主键值。
+///
+/// 词条截图/笔记的标题行就是「麻黄」这种光秃秃的名字——它解析不出任何
+/// `标签：值`，以前只能躺在 unknown 里让人手动补主键，整条就废了。
+/// 在「块里没有主键字段」的前提下，无分隔符的短行作为主键是唯一合理解释，
+/// 不是猜：解释写在 hits 里（label = 主键字段名），用户看得见、可撤销。
+/// 上限 8 字：中药名最长不过五六字（如「九香虫」「广藿香」），更长的多半是
+/// 没写标签的正文句子（「完全没有标签的一段话」这种），留在 unknown 里。
+fn promote_primary_from_unknown(out: &mut PasteParse, schema: &DomainSchema, kind: &str) {
+    let Some(def) = schema.entity_def(kind) else { return };
+    let primary = def.primary.clone().unwrap_or_else(|| "name".into());
+    if out.fields.contains_key(&primary) {
+        return;
+    }
+    let pos = out
+        .unknown
+        .iter()
+        .position(|line| split_pair(line).is_none() && line.chars().count() <= 8);
+    if let Some(i) = pos {
+        let value = out.unknown.remove(i);
+        let label = def
+            .fields
+            .iter()
+            .find(|f| f.key == primary)
+            .map(|f| label_of(f))
+            .unwrap_or_else(|| primary.clone());
+        out.fields.insert(primary.clone(), value.clone());
+        out.hits.push(PasteHit { key: primary, label, value, line: 0 });
+    }
 }
 
 /// 一批粘贴结果：**空行分隔**多条。

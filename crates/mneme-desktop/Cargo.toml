@@ -14,3 +14,8 @@ anyhow.workspace = true
 tray-icon = "0.26"
 wry = "0.57.1"
 tao = "0.37.2"
+# 全局热键（Ctrl+Alt+O 剪贴板识字）+ 读剪贴板图片
+global-hotkey = "0.10"
+arboard = "3"
+image.workspace = true
+serde_json.workspace = true
