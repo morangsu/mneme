@@ -8,7 +8,7 @@
 
 const TOKEN = new URLSearchParams(location.search).get('token') || '';
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 async function api(path, opt = {}) {
   const sep = path.includes('?') ? '&' : '?';
@@ -27,10 +27,18 @@ const S = {
   items: [],        // 当前列表的行（统一抽象：{id,title,cells?}）
   sel: -1,          // 选中行下标
   query: '',
+  viewMode: 'table',    // 'table' | 'cards'，localStorage 记忆
+  groupMode: false,     // 按分组树聚合（?group=1）
+  collapsed: new Set(), // 折叠的分组 key（路径 '>' 连接）
 };
+try { S.viewMode = localStorage.getItem('mneme.viewMode') === 'cards' ? 'cards' : 'table'; } catch (_) {}
 
 // ---- 启动 -------------------------------------------------------------
 async function boot() {
+  // 深链：&group=1 按分组聚合、&mode=cards 卡片模式（配合无头验证与分享）
+  const qp0 = new URLSearchParams(location.search);
+  if (qp0.get('group') === '1') S.groupMode = true;
+  if (qp0.get('mode') === 'cards') S.viewMode = 'cards';
   const s = await api('/api/state');
   if (s.error) { $('list').innerHTML = `<div class="empty">${esc(s.error)}</div>`; return; }
   $('state').textContent = ` · ${s.schema || '未加载领域'} · ${s.entities} 条 · ${s.cards} 张卡 · rev ${s.rev}`;
@@ -54,49 +62,228 @@ async function selectView(i) {
     el.classList.toggle('on', k === i));
   refreshCreate();
   if (!S.viewId) return;
-  S.view = await api('/api/view/' + encodeURIComponent(S.viewId));
+  await loadView();
+}
+
+async function loadView() {
+  const i = S.views.findIndex((x) => x.id === S.viewId);
+  // ?group=1 强制按分组树聚合（对齐手机端矩阵的「按分组」）；折叠状态跨重取保留
+  const gp = S.groupMode ? '?group=1' : '';
+  S.view = await api('/api/view/' + encodeURIComponent(S.viewId) + gp);
   if (S.view.error) { $('list').innerHTML = `<div class="empty">${esc(S.view.error)}</div>`; return; }
-  $('list-title').textContent = `${S.views[i].label || S.viewId} · ${S.view.rows.length} 行`;
+  $('list-title').innerHTML =
+    `${esc(S.views[i]?.label || S.viewId)} · ${S.view.rows.length} 行 ` +
+    `<button id="view-mode" class="ghost" title="切换表格/卡片模式">${S.viewMode === 'cards' ? '表格' : '卡片'}</button>` +
+    `<button id="view-group" class="ghost" title="按分组树聚合显示（可折叠）">${S.groupMode ? '取消分组' : '按分组'}</button>` +
+    (hasGroups() ? ` <button id="view-expand" class="ghost" title="展开/折叠全部分组">${S.collapsed.size ? '全部展开' : '全部折叠'}</button>` : '');
+  $('view-mode').addEventListener('click', () => {
+    S.viewMode = S.viewMode === 'cards' ? 'table' : 'cards';
+    try { localStorage.setItem('mneme.viewMode', S.viewMode); } catch (_) {}
+    loadView();
+  });
+  $('view-group').addEventListener('click', () => { S.groupMode = !S.groupMode; loadView(); });
+  const ex = $('view-expand');
+  if (ex) ex.addEventListener('click', toggleAllGroups);
   renderView();
 }
 
-// ---- 视图表格 ----------------------------------------------------------
+function hasGroups() {
+  return (S.view?.rows || []).some((r) => Array.isArray(r._group_path) && r._group_path.length > 1);
+}
+
+function toggleAllGroups() {
+  if (S.collapsed.size) S.collapsed.clear();
+  else collectGroupKeys(groupTreeOf(S.view.rows || []), S.collapsed);
+  renderView();
+  const ex = $('view-expand');
+  if (ex) ex.textContent = S.collapsed.size ? '全部展开' : '全部折叠';
+}
+
+function collectGroupKeys(node, into) {
+  for (const [name, child] of node.children) {
+    into.add(child.key);
+    collectGroupKeys(child, into);
+  }
+}
+
+// 把扁平行按 _group_path 聚成嵌套树；没有路径的行直接挂在 root.rows（未分组）
+function groupTreeOf(rows) {
+  const root = { children: new Map(), rows: [], key: '' };
+  for (const r of rows) {
+    const path = Array.isArray(r._group_path) && r._group_path.length ? r._group_path : null;
+    if (!path) { root.rows.push(r); continue; }
+    let node = root;
+    let key = '';
+    for (const seg of path) {
+      key = key ? key + '>' + seg : seg;
+      if (!node.children.has(seg)) node.children.set(seg, { children: new Map(), rows: [], key });
+      node = node.children.get(seg);
+    }
+    node.rows.push(r);
+  }
+  return root;
+}
+
+// ---- 视图表格 / 卡片 ----------------------------------------------------
 function renderView() {
   const v = S.view;
   const rows = v.rows || [];
+  const tree = groupTreeOf(rows);
+  const grouped = tree.children.size > 0;
+  // 可见行（折叠生效后）决定 S.items，键盘移动与详情都跟着走
+  const visible = [];
+  collectVisible(tree, visible);
+  const prevSel = S.items[S.sel]?.id;
   // 视图行的主键在不同领域包里可能是 _id / id / 主字段；缺一不可回退，
   // 否则首屏自动开详情会打到 /api/entity/undefined。
-  S.items = rows.map((r) => ({
+  S.items = visible.map((r) => ({
     id: r._id ?? r.id ?? r[v.primary] ?? '',
     title: r[v.primary] || r._id || '',
   }));
-  S.sel = S.items.length ? 0 : -1;
-  const cap = 500;
-  const shown = rows.slice(0, cap);
-  const head = `<tr>${v.columns.map((c) => `<th class="${c.key === v.primary ? '' : 'wrap'}">${esc(c.label || c.key)}</th>`).join('')}</tr>`;
-  let lastGroup = null;
-  const body = shown.map((r, idx) => {
-    const cells = v.columns.map((c) => {
-      const val = r[c.key] || '';
-      const cls = c.key === v.primary ? 'name' : 'wrap';
-      const tag = c.immutable && val ? '<span class="tag imm">原样</span>' : '';
-      return `<td class="${cls}">${tag}${esc(val)}</td>`;
-    }).join('');
-    let groupRow = '';
-    if (v.group_by && r._group !== lastGroup) {
-      lastGroup = r._group;
-      groupRow = `<tr class="group-row"><td colspan="${v.columns.length}">${esc(r._group || '未分组')}</td></tr>`;
-    }
-    return groupRow +
-      `<tr class="row${idx === S.sel ? ' on' : ''}" data-idx="${idx}">${cells}</tr>`;
-  }).join('');
-  const more = rows.length > cap
-    ? `<div class="muted" style="padding:8px 0">还有 ${rows.length - cap} 行没显示，用检索（/）缩小范围</div>` : '';
-  $('list').innerHTML =
-    `<table>${head}<tbody>${body || `<tr><td>没有数据</td></tr>`}</tbody></table>` + more;
+  S.sel = Math.max(0, S.items.findIndex((x) => x.id === prevSel));
+  if (!S.items.length) S.sel = -1;
+
+  if (S.viewMode === 'cards') {
+    renderViewCards(tree, grouped, rows.length);
+  } else {
+    renderViewTable(tree, grouped, rows.length);
+  }
   bindRowClick();
   syncSelection();
   if (S.sel >= 0) showDetail(S.items[S.sel].id);
+}
+
+function collectVisible(node, out) {
+  for (const child of node.children.values()) {
+    if (!S.collapsed.has(child.key)) {
+      out.push(...child.rows);
+      collectVisible(child, out);
+    }
+  }
+  out.push(...node.rows);
+}
+
+function rowCells(r, v) {
+  return v.columns.map((c) => {
+    const val = r[c.key] || '';
+    const cls = c.key === v.primary ? 'name' : 'wrap';
+    const tag = c.immutable && val ? '<span class="tag imm">原样</span>' : '';
+    return `<td class="${cls}">${tag}${esc(val)}</td>`;
+  }).join('');
+}
+
+function renderViewTable(tree, grouped, total) {
+  const v = S.view;
+  const cap = 500;
+  const head = `<tr>${v.columns.map((c) => `<th class="${c.key === v.primary ? '' : 'wrap'}">${esc(c.label || c.key)}</th>`).join('')}</tr>`;
+  let shown = 0;
+  const bodyParts = [];
+  // 结构：组头 → 组内直属行 → 再递归子组；root.rows 是未分组行，只在最外层输出一次
+  const emitNode = (node, depth, isRoot) => {
+    for (const [name, child] of node.children) {
+      if (shown >= cap) return;
+      const isCollapsed = S.collapsed.has(child.key);
+      const n = countRows(child);
+      const dot = '·'.repeat(depth);
+      bodyParts.push(
+        `<tr class="group-row" data-g="${esc(encodeURIComponent(child.key))}"><td colspan="${v.columns.length}">` +
+        `<span class="tw">${isCollapsed ? '▸' : '▾'}</span>${dot ? `<span class="muted">${dot} </span>` : ''}${esc(name)} ` +
+        `<span class="muted">${n}</span></td></tr>`);
+      if (!isCollapsed) {
+        for (const r of child.rows) {
+          if (shown >= cap) break;
+          const idx = S.items.findIndex((x) => x.id === (r._id ?? r.id));
+          bodyParts.push(`<tr class="row${idx === S.sel ? ' on' : ''}" data-idx="${idx}">${rowCells(r, v)}</tr>`);
+          shown++;
+        }
+        emitNode(child, depth + 1, false);
+      }
+    }
+    if (isRoot) {
+      for (const r of node.rows) {
+        if (shown >= cap) break;
+        const idx = S.items.findIndex((x) => x.id === (r._id ?? r.id));
+        bodyParts.push(`<tr class="row${idx === S.sel ? ' on' : ''}" data-idx="${idx}">${rowCells(r, v)}</tr>`);
+        shown++;
+      }
+    }
+  };
+  emitNode(tree, 0, true);
+  const more = total > cap
+    ? `<div class="muted" style="padding:8px 0">还有 ${total - cap} 行没显示，用检索（/）缩小范围</div>` : '';
+  $('list').innerHTML =
+    `<table>${head}<tbody>${bodyParts.join('') || `<tr><td>没有数据</td></tr>`}</tbody></table>` + more;
+  bindGroupToggle();
+}
+
+function countRows(node) {
+  let n = node.rows.length;
+  for (const c of node.children.values()) n += countRows(c);
+  return n;
+}
+
+function bindGroupToggle() {
+  document.querySelectorAll('#list .group-row[data-g]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const key = decodeURIComponent(el.dataset.g);
+      if (S.collapsed.has(key)) S.collapsed.delete(key);
+      else S.collapsed.add(key);
+      renderView();
+    });
+  });
+}
+
+function renderViewCards(tree, grouped, total) {
+  const v = S.view;
+  const cap = 300;
+  const parts = [];
+  let shown = 0;
+  const card = (r) => {
+    const idx = S.items.findIndex((x) => x.id === (r._id ?? r.id));
+    const sub = v.columns.filter((c) => c.key !== v.primary).slice(0, 2)
+      .map((c) => r[c.key]).filter(Boolean).map((x) => esc(x)).join('<br>');
+    return `<div class="card${idx === S.sel ? ' on' : ''}" data-idx="${idx}">` +
+      `<div class="card-name">${esc(r[v.primary] || r._id || '')}</div>` +
+      (sub ? `<div class="card-sub">${sub}</div>` : '') +
+      `</div>`;
+  };
+  // 结构：组头 → 组内直属卡片 → 再递归子组；root.rows 是未分组卡片，只在最外层输出一次
+  const emitNode = (node, depth, isRoot) => {
+    for (const [name, child] of node.children) {
+      if (shown >= cap) return;
+      const isCollapsed = S.collapsed.has(child.key);
+      const dot = '·'.repeat(depth);
+      parts.push(
+        `<div class="group-row" data-g="${esc(encodeURIComponent(child.key))}">` +
+        `<span class="tw">${isCollapsed ? '▸' : '▾'}</span>${dot ? `<span class="muted">${dot} </span>` : ''}${esc(name)} ` +
+        `<span class="muted">${countRows(child)}</span></div>`);
+      if (!isCollapsed) {
+        for (const r of child.rows) {
+          if (shown >= cap) break;
+          parts.push(card(r)); shown++;
+        }
+        emitNode(child, depth + 1, false);
+      }
+    }
+    if (isRoot) {
+      for (const r of node.rows) {
+        if (shown >= cap) break;
+        parts.push(card(r)); shown++;
+      }
+    }
+  };
+  emitNode(tree, 0, true);
+  const more = total > cap
+    ? `<div class="muted" style="padding:8px 0">还有 ${total - cap} 条没显示，用检索（/）缩小范围</div>` : '';
+  $('list').innerHTML = `<div class="card-grid">${parts.join('') || '<div class="empty">没有数据</div>'}</div>` + more;
+  bindGroupToggle();
+  document.querySelectorAll('#list .card[data-idx]').forEach((el) => {
+    el.addEventListener('click', () => {
+      S.sel = +el.dataset.idx;
+      syncSelection();
+      showDetail(S.items[S.sel].id);
+    });
+  });
 }
 
 // ---- 检索 -------------------------------------------------------------

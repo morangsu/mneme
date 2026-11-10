@@ -611,8 +611,18 @@ async fn api_views(State(s): State<AppState>) -> Json<JsonValue> {
     Json(json!({ "views": views }))
 }
 
-async fn api_view(State(s): State<AppState>, Path(id): Path<String>) -> Json<JsonValue> {
-    let (schema, entities) = s.store.read(|m| (m.schema.clone(), m.entities_vec()));
+async fn api_view(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Json<JsonValue> {
+    let (schema, entities, groups) = s.store.read(|m| {
+        (
+            m.schema.clone(),
+            m.entities_vec(),
+            m.groups.values().cloned().collect::<Vec<_>>(),
+        )
+    });
     let Some(schema) = schema else {
         return Json(json!({ "error": "还没有加载领域 schema" }));
     };
@@ -665,21 +675,49 @@ async fn api_view(State(s): State<AppState>, Path(id): Path<String>) -> Json<Jso
         list.sort_by(|a, b| a.id.cmp(&b.id));
     }
 
+    // ?group=1：强制按 Group 树聚合（即使视图没配 group_by），对齐手机端矩阵的「按分组」。
+    // 有 group_by 时仍优先视图自己的字段分组。
+    let force_group = q.get("group").map(|x| x == "1").unwrap_or(false);
+    let group_key = v.group_by.clone().unwrap_or_else(|| {
+        if force_group { "group_id".to_string() } else { String::new() }
+    });
+    // 分组路径：优先用实体挂的 Group（支持多级），没挂才退回 group_by 字段文本。
+    // 与 FFI 的 matrix_rows 同源，老数据（只有字符串分组）不会因分组树失去分组。
+    let tree = group_tree(&groups);
     let rows: Vec<JsonValue> = list
         .iter()
         .map(|e| {
             let mut row = serde_json::Map::new();
+            // 行里必须带实体 id：否则 UI 只能靠主键文本反查，改名后就对不上了。
+            row.insert("_id".into(), json!(e.id));
             for c in &v.columns {
                 row.insert(
                     c.clone(),
                     json!(e.get(c).map(|x| x.display()).unwrap_or_default()),
                 );
             }
-            if let Some(g) = &v.group_by {
-                row.insert(
-                    "_group".into(),
-                    json!(e.get(g).map(|x| x.display()).unwrap_or_default()),
-                );
+            if !group_key.is_empty() {
+                let node = e
+                    .group_id
+                    .as_deref()
+                    .and_then(|gid| tree.iter().find(|n| n.id == gid));
+                match node {
+                    Some(n) => {
+                        row.insert("_group".into(), json!(n.display_path()));
+                        row.insert("_group_path".into(), json!(n.path_names));
+                        row.insert("_group_id".into(), json!(n.id));
+                        row.insert("_group_depth".into(), json!(n.depth));
+                    }
+                    None => {
+                        let text = e.get(&group_key).map(|x| x.display()).unwrap_or_default();
+                        row.insert("_group".into(), json!(text));
+                        if !text.is_empty() {
+                            row.insert("_group_path".into(), json!([text]));
+                        }
+                        row.insert("_group_id".into(), json!(""));
+                        row.insert("_group_depth".into(), json!(0));
+                    }
+                }
             }
             JsonValue::Object(row)
         })

@@ -274,6 +274,31 @@ main {
   color: var(--md-on-surface-variant); font-size: var(--type-body-medium-size);
   background: var(--md-surface-container-low); padding-top: var(--space-m);
 }
+#list .group-row { cursor: pointer; user-select: none; }
+#list .group-row .tw { display: inline-block; width: 14px; color: var(--md-primary); }
+/* 卡片模式：多列网格 + 分组小节标题 */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-s); }
+.card-grid .group-row {
+  grid-column: 1 / -1;
+  color: var(--md-on-surface-variant); font-size: var(--type-body-medium-size);
+  background: var(--md-surface-container-low);
+  padding: var(--space-s) var(--space-m) 2px; margin-top: var(--space-s);
+  border-radius: var(--shape-s);
+}
+.card-grid .card {
+  background: var(--md-surface-container-low);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--shape-m); padding: var(--space-m);
+  cursor: pointer; overflow: hidden;
+}
+.card-grid .card:hover { background: var(--state-hover); }
+.card-grid .card.on { background: var(--state-selected); outline: 1px solid var(--md-primary); }
+.card-grid .card-name { color: var(--md-primary); font-weight: 500; }
+.card-grid .card-sub {
+  color: var(--md-on-surface-variant); font-size: var(--type-body-small-size);
+  margin-top: var(--space-xs); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
 .hit {
   padding: var(--row-pad) var(--space-m); border-radius: var(--shape-s);
   cursor: pointer; margin-bottom: var(--space-xs);
