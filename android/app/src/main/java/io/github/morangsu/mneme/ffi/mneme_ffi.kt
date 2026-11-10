@@ -1191,7 +1191,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_configure_sync() != 38613.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mneme_ffi_checksum_func_create_entities() != 19852.toShort()) {
+    if (lib.uniffi_mneme_ffi_checksum_func_create_entities() != 3192.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_create_entity() != 8125.toShort()) {
@@ -1206,7 +1206,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_delete_group() != 22200.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mneme_ffi_checksum_func_edit_entity() != 57919.toShort()) {
+    if (lib.uniffi_mneme_ffi_checksum_func_edit_entity() != 32612.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_entity_detail() != 37447.toShort()) {
@@ -1227,7 +1227,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mneme_ffi_checksum_func_judge() != 45969.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mneme_ffi_checksum_func_list_deleted() != 21048.toShort()) {
+    if (lib.uniffi_mneme_ffi_checksum_func_list_deleted() != 18221.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mneme_ffi_checksum_func_list_groups() != 53189.toShort()) {
@@ -1619,13 +1619,7 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     )
     }
     
-
-        /**
-         * 批量新建（粘贴多条、OCR 一段里有多味药）。
-         *
-         * **逐条独立**：一条失败不影响其它条 —— 批量里 20 味药因为第 3 条重名就整批失败，
-         * 用户会失去所有已确认的内容。重名与类型错误分别归类返回，UI 能逐条说清原因。
-         */ fun `createEntities`(`kind`: kotlin.String, `itemsJson`: kotlin.String): kotlin.String {
+ fun `createEntities`(`kind`: kotlin.String, `itemsJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_create_entities(
@@ -1695,6 +1689,7 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
          * 报错里列出具体字段名，UI 据此提示「需新建条目」。
          * - 值没变化的字段不产生事件（`unchanged`），避免无意义的 rev 增长与同步流量。
          * - 全部是合法改动才写；只写一条 `UpsertEntity`，`rev` 取库内最大值 +1。
+         * - 校验实现在 core（`apply_edit`），server 的 `/api/edit` 用同一份。
          */ fun `editEntity`(`entityId`: kotlin.String, `fieldsJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
@@ -1767,10 +1762,7 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     )
     }
     
-
-        /**
-         * 回收站列表（只读）。
-         */ fun `listDeleted`(): kotlin.String {
+ fun `listDeleted`(): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mneme_ffi_fn_func_list_deleted(

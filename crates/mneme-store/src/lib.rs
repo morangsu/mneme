@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 //! # mneme-store
 //!
 //! 存储层：**append-only 事件日志 + 不可变快照 + 内存倒排索引**。
@@ -81,8 +81,9 @@ pub struct Store {
     root: PathBuf,
     /// 数据目录独占锁。事件日志与 SQLite 镜像都不支持多进程同写，
     /// 托盘常驻后桌面进程生命周期变长，第二个进程必须被挡在门外而不是悄悄并发。
-    /// 句柄存在这里 = 锁随进程存活，进程退出自动释放（含崩溃）。
-    _dir_lock: Option<std::fs::File>,
+    /// 同进程的多个 Store **共享同一个句柄**（Arc）——flock 按「打开句柄」算，
+    /// 第二个句柄连本进程都会撞锁；最后一个 Store 丢弃时句柄才关闭、锁才释放。
+    _dir_lock: Option<std::sync::Arc<std::fs::File>>,
     /// 卡片装载闸门。懒加载必须只装一次：FFI 与 server 可能并发进来，
     /// 没有这道锁就会把 34k 张卡装两遍（白花 80 ms，还浪费一份内存）。
     cards_gate: parking_lot::Mutex<()>,
@@ -112,7 +113,7 @@ impl Store {
         fs::create_dir_all(&root)?;
         // 独占锁放在最前面：抢不到就拒绝打开，绝不能带着并发写继续跑。
         // 锁文件本身无内容，锁的是文件的字节区间，进程退出即释放。
-        let dir_lock = lock_dir(&root)?;
+        let dir_lock = acquire_dir_lock(&root)?;
         let log = EventLog::open(&root, device)?;
         let snaps = SnapshotStore::open(&root)?;
 
@@ -485,21 +486,40 @@ impl Store {
     }
 }
 
-/// 给数据目录上一把进程级独占锁。
+/// 进程内的目录锁登记表：路径 -> 弱引用。
 ///
-/// 用 OS 字节区间锁而不是「写 PID 文件再检查」：后者在崩溃后留下死文件、
-/// 两个进程的检查之间有竞态，都不可靠。锁失败返回明确错误，
-/// 由各端把「数据目录被占用」讲给用户听。
-fn lock_dir(root: &Path) -> Result<Option<std::fs::File>> {
-    let path = root.join(".lock");
+/// flock 按「打开句柄」算：同一个进程里第二个句柄去锁同一个文件也会失败，
+/// 所以 Android 上 Activity 与后台 Worker 各开一次 Store 必须共享同一个锁句柄。
+/// 用 Weak 是关键——表里只留弱引用，强引用都在活着的 Store 手里；
+/// 最后一个 Store 丢弃时 Arc 归零、OS 锁释放，表项下次自动被清掉。
+/// （否则会出现「早期 Store 已死、OS 锁早没了，路径却还挂在表里，
+/// 后续打开全部绕过 OS 锁」的假象——这正是真机回归抓到的那个 bug。）
+fn acquire_dir_lock(root: &Path) -> Result<Option<std::sync::Arc<std::fs::File>>> {
+    static PROCESS_LOCKS: std::sync::OnceLock<
+        parking_lot::Mutex<std::collections::HashMap<PathBuf, std::sync::Weak<std::fs::File>>>,
+    > = std::sync::OnceLock::new();
+    let locks = PROCESS_LOCKS.get_or_init(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
+    let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+
+    let mut map = locks.lock();
+    if let Some(arc) = map.get(&canonical).and_then(std::sync::Weak::upgrade) {
+        return Ok(Some(arc));
+    }
+    map.remove(&canonical); // 清掉已死的弱引用
+
     let f = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(&path)?;
+        .open(root.join(".lock"))?;
     use fs2::FileExt;
     match f.try_lock_exclusive() {
-        Ok(()) => Ok(Some(f)),
+        Ok(()) => {
+            clear_inherit(&f);
+            let arc = std::sync::Arc::new(f);
+            map.insert(canonical, std::sync::Arc::downgrade(&arc));
+            Ok(Some(arc))
+        }
         Err(_) => Err(Error::Invalid(format!(
             "数据目录 {} 已被另一个 mneme 进程占用（托盘里可能有常驻实例）",
             root.display()
@@ -507,7 +527,21 @@ fn lock_dir(root: &Path) -> Result<Option<std::fs::File>> {
     }
 }
 
-#[cfg(test)]
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn clear_inherit(file: &std::fs::File) {
+    const HANDLE_FLAG_INHERIT: u32 = 0x1;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetHandleInformation(hObject: isize, dwMask: u32, dwFlags: u32) -> i32;
+    }
+    use std::os::windows::io::AsRawHandle;
+    unsafe { SetHandleInformation(file.as_raw_handle() as isize, HANDLE_FLAG_INHERIT, 0) };
+}
+
+#[cfg(not(windows))]
+fn clear_inherit(_file: &std::fs::File) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

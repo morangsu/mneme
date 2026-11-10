@@ -165,6 +165,14 @@ fn parse_clues(schema: &DomainSchema, raw: &[String]) -> Vec<(String, String)> {
 #[uniffi::export]
 pub fn open_database(path: String, device: String) -> String {
     let root = PathBuf::from(&path);
+    // 幂等：Activity 与后台 Worker 会在同一进程各调一次。目录相同就直接返回 ok，
+    // 不再二次 Store::open——那既浪费（重放+索引），又会撞进程内的目录锁。
+    {
+        let guard = STATE.get().and_then(|m| m.lock().ok());
+        if guard.as_ref().is_some_and(|a| a.as_ref().map(|app| app.root == root).unwrap_or(false)) {
+            return json!({ "ok": true, "path": path, "device": device, "reused": true }).to_string();
+        }
+    }
     let result = (|| -> std::result::Result<Json, String> {
         let store = Store::open(&root, &device).map_err(|e| e.to_string())?;
         let cfg = SyncConfig::from_file(&root.join("sync.json")).ok();

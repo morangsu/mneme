@@ -3,6 +3,7 @@ package io.github.morangsu.mneme
 import android.content.Context
 import android.provider.Settings
 import java.util.UUID
+import org.json.JSONObject
 
 /**
  * 本地数据库说明：
@@ -42,6 +43,12 @@ object Db {
         return id
     }
 
-    /** 初始化 Rust 侧数据库；返回 state 形态的 JSON。 */
-    suspend fun init(context: Context) = Api.openDatabase(databasePath(context), deviceId(context))
+    /** 初始化 Rust 侧数据库；返回 state 形态的 JSON。失败必须留痕——UI 会静默吞掉它。 */
+    suspend fun init(context: Context): JSONObject {
+        val r = Api.openDatabase(databasePath(context), deviceId(context))
+        if (r.has("error")) {
+            android.util.Log.w("mneme", "openDatabase 失败: ${r.optString("error")}")
+        }
+        return r
+    }
 }

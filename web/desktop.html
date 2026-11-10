@@ -20,6 +20,24 @@
     <div class="muted" id="search-note">输入即搜；AND 无结果自动改 OR</div>
     <div id="views"></div>
     <div class="muted" id="meta"></div>
+
+    <details id="sync-box">
+      <summary>同步（GitHub 私有库）</summary>
+      <div class="muted" id="sync-status">读取中…</div>
+      <div class="sync-btns">
+        <button id="sync-dry" class="ghost">预演</button>
+        <button id="sync-run">立即同步</button>
+      </div>
+      <pre id="sync-out" class="muted"></pre>
+      <div id="sync-form">
+        <input id="sync-owner" placeholder="owner" autocomplete="off" />
+        <input id="sync-repo" placeholder="repo" autocomplete="off" />
+        <input id="sync-path" placeholder="仓库内路径（留空为根）" autocomplete="off" />
+        <input id="sync-token" placeholder="token（留空 = 沿用已保存的）" type="password" autocomplete="off" />
+        <button id="sync-save">保存配置并启用</button>
+        <div class="muted">token 只写进本机数据目录的 sync.json，别提交或外传。</div>
+      </div>
+    </details>
   </aside>
 
   <section id="list-pane">

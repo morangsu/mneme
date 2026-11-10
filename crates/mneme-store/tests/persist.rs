@@ -275,18 +275,41 @@ fn opening_without_cards_does_not_wipe_mirror_cards() {
 
 #[test]
 fn second_process_cannot_open_same_dir() {
-    // 托盘常驻后桌面进程长期活着：第二个实例必须被文件锁挡住，
-    // 而不是带着并发写继续跑（事件日志和 SQLite 都不支持多进程同写）。
+    // 跨进程必须被文件锁挡住（事件日志和 SQLite 都不支持多进程同写）。
+    // 注意「同进程」反而要放行：Android 上 Activity 与后台 Worker 会在同一个
+    // 进程里各开一次 Store，flock 按「打开句柄」算，进程内第二个句柄也冲突——
+    // 所以锁是「同进程共享句柄 + OS 锁跨进程」的两层设计。
+    //
+    // 子进程模式必须在**任何文件操作之前**分流：子进程若也执行 tmp() 的
+    // remove_dir_all，会把父进程锁着的 .lock 文件整个删掉（Rust 打开文件
+    // 默认带 FILE_SHARE_DELETE），锁就形同虚设——这个坑第一版就踩了。
+    if std::env::var("MNEME_LOCK_CHILD").is_ok() {
+        let dir = std::path::PathBuf::from(std::env::var("MNEME_LOCK_DIR").unwrap());
+        let ok = Store::open_timed(&dir, "child").is_ok();
+        std::process::exit(if ok { 0 } else { 42 });
+    }
+
     let dir = tmp("lock");
     seed(&dir);
     let _first = Store::open_timed(&dir, "t").unwrap();
+
+    // 同进程第二次打开必须放行（Android Activity + Worker 的真实形态）
     let second = Store::open_timed(&dir, "t2");
-    let err = second.err().expect("第二个实例应当打开失败");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("已被另一个 mneme 进程占用"),
-        "错误要能被用户读懂：{msg}"
+    assert!(second.is_ok(), "同进程重复打开应当放行：{:?}", second.err());
+
+    // 跨进程：起真子进程，必须被文件锁挡住（exit 42 = 打开失败）
+    let exe = std::env::current_exe().unwrap();
+    let status = std::process::Command::new(exe)
+        .args(["--exact", "second_process_cannot_open_same_dir", "--nocapture"])
+        .env("MNEME_LOCK_CHILD", "1")
+        .env("MNEME_LOCK_DIR", &dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("起子进程");
+    assert_eq!(
+        status.code(),
+        Some(42),
+        "子进程应当被文件锁挡住（exit 42），实际 {status}"
     );
-    // 锁文件不应出现在同步/导出里造成困扰——它是无内容的隐藏哨兵，只由锁管理
-    assert!(dir.join(".lock").exists());
 }

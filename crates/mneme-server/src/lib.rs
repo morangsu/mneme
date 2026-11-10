@@ -49,7 +49,9 @@ pub struct UpstreamState {
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<Store>,
-    pub engine: Option<Arc<SyncEngine>>,
+    /// 同步引擎可热替换：桌面端「保存同步配置」后立即生效，不用重启进程。
+    /// RwLock 而不是裸 Option，是因为 upstream 裁决后台派发也要读它。
+    pub engine: Arc<std::sync::RwLock<Option<Arc<SyncEngine>>>>,
     pub token: Option<String>,
     pub upstream: Arc<StdMutex<UpstreamState>>,
     /// 已登录的浏览器会话（session_id -> 过期毫秒）。只在内存里，重启即全体失效；
@@ -97,7 +99,7 @@ impl AppState {
         };
         Self {
             store,
-            engine,
+            engine: Arc::new(std::sync::RwLock::new(engine)),
             token,
             sessions: Arc::new(StdMutex::new(std::collections::HashMap::new())),
             upstream: Arc::new(StdMutex::new(UpstreamState {
@@ -125,6 +127,7 @@ pub fn router(state: AppState) -> Router {
         .route("/export", get(api_export))
         .route("/sync/status", get(api_sync_status))
         .route("/sync/{id}", post(api_sync))
+        .route("/sync/config", post(api_sync_config))
         .route("/upstream/status", get(api_upstream_status))
         .route("/upstream/adopt", post(api_upstream_adopt))
         .route("/upstream/pull", post(api_upstream_pull))
@@ -1017,7 +1020,12 @@ async fn api_upstream_resolve(State(s): State<AppState>, Json(b): Json<ResolveBo
     save_json(&u.root, "upstream/last-report.json", &report);
     let entries: Vec<JsonValue> = report.log.iter().map(|e| json!(e)).collect();
     u.plans.remove(&b.plan_id);
-    let target = s.engine.as_ref().and_then(|e| e.target("github-private").ok());
+    let target = s
+        .engine
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .and_then(|e| e.target("github-private").ok());
     // std::sync::MutexGuard 不能跨 await（Future 会失去 Send），先用完再释放。
     // 决策日志推私有库改为后台派发，不阻塞裁决结果。
     drop(u);
@@ -1124,12 +1132,9 @@ async fn api_export(
 }
 
 async fn api_sync_status(State(s): State<AppState>) -> Json<JsonValue> {
-    let targets = s
-        .engine
-        .as_ref()
-        .map(|e| e.target_ids())
-        .unwrap_or_default();
-    Json(json!({ "targets": targets, "synced": false }))
+    let engine = s.engine.read().unwrap_or_else(|e| e.into_inner()).clone();
+    let targets = engine.as_ref().map(|e| e.target_ids()).unwrap_or_default();
+    Json(json!({ "targets": targets, "configured": engine.is_some() }))
 }
 
 async fn api_sync(
@@ -1137,7 +1142,8 @@ async fn api_sync(
     Path(id): Path<String>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Json<JsonValue> {
-    let Some(engine) = &s.engine else {
+    let engine = s.engine.read().unwrap_or_else(|e| e.into_inner()).clone();
+    let Some(engine) = engine else {
         return Json(json!({ "error": "未配置 data/sync.json" }));
     };
     let dry = q.get("dry").is_some_and(|x| x == "true" || x == "1");
@@ -1145,6 +1151,77 @@ async fn api_sync(
         Ok(r) => Json(json!({ "ok": true, "report": r.to_string(), "sha256": r.sha256, "retries": r.retries })),
         Err(e) => Json(json!({ "error": e.to_string() })),
     }
+}
+
+/// 桌面端保存同步配置：写 `sync.json` 并热替换引擎。
+///
+/// token 允许明文（桌面单机、文件就在用户自己的数据目录里）或 `${ENV:VAR}` 引用；
+/// 与手机端不同，桌面没有 Keystore，这份文件不要提交或外传。
+#[derive(Deserialize)]
+struct SyncConfigBody {
+    owner: String,
+    repo: String,
+    #[serde(default)]
+    branch: String,
+    #[serde(default)]
+    path: String,
+    token: String,
+}
+
+async fn api_sync_config(State(s): State<AppState>, Json(b): Json<SyncConfigBody>) -> Json<JsonValue> {
+    if b.owner.trim().is_empty() || b.repo.trim().is_empty() {
+        return Json(json!({ "error": "owner / repo 不能为空" }));
+    }
+    if b.token.trim().is_empty() {
+        // 没有 token 却覆盖配置 = 把引擎换成必然 401 的状态，宁可拒绝
+        let engine = s.engine.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(e) = engine else {
+            return Json(json!({ "error": "首次配置必须提供 token" }));
+        };
+        // 已有引擎时沿用其 token（UI 留空 = 不改凭据）
+        let old = e.config().targets.iter().find_map(|t| match t {
+            mneme_sync::TargetConfig::GitHub { token, .. } => Some(token.clone()),
+            _ => None,
+        });
+        let Some(old) = old else {
+            return Json(json!({ "error": "首次配置必须提供 token" }));
+        };
+        return apply_sync_config(&s, b.owner, b.repo, b.branch, b.path, old).await;
+    }
+    apply_sync_config(&s, b.owner, b.repo, b.branch, b.path, b.token.trim().to_string()).await
+}
+
+async fn apply_sync_config(
+    s: &AppState,
+    owner: String,
+    repo: String,
+    branch: String,
+    path: String,
+    token: String,
+) -> Json<JsonValue> {
+    use mneme_sync::TargetConfig;
+    let cfg = SyncConfig {
+        device_id: s.store.device().to_string(),
+        targets: vec![TargetConfig::GitHub {
+            id: "github-private".into(),
+            token,
+            owner,
+            repo,
+            branch: if branch.trim().is_empty() { "main".into() } else { branch.trim().into() },
+            path: path.trim().to_string(),
+        }],
+        exclude: vec![],
+        max_retries: 3,
+        upload_snapshots: true,
+        keep_snapshots: 30,
+    };
+    if let Err(e) = cfg.to_file(&s.store.root().join("sync.json")) {
+        return Json(json!({ "error": e.to_string() }));
+    }
+    let ids = cfg.targets.iter().map(|t| t.id().to_string()).collect::<Vec<_>>();
+    *s.engine.write().unwrap_or_else(|e| e.into_inner()) =
+        Some(Arc::new(SyncEngine::new(s.store.clone(), cfg)));
+    Json(json!({ "ok": true, "targets": ids, "configured": true }))
 }
 
 /// 供 CLI 的 `serve` 子命令直接构造默认配置。

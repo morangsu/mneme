@@ -285,6 +285,49 @@ $('q').addEventListener('input', () => {
 
 $('create').addEventListener('click', openCreate);
 
+// ---- 同步 --------------------------------------------------------------
+// 状态、预演/真跑、保存配置三件事都在这；引擎在服务端热替换，保存后立刻生效。
+async function refreshSync() {
+  const st = await api('/api/sync/status');
+  const el = $('sync-status');
+  if (st.error) { el.textContent = st.error; return; }
+  el.textContent = st.configured
+    ? `已配置：${(st.targets || []).join('、')}`
+    : '未配置（填 owner/repo/token 后保存）';
+  $('sync-dry').disabled = $('sync-run').disabled = !st.configured;
+}
+
+async function runSync(dry) {
+  const out = $('sync-out');
+  out.textContent = dry ? '预演中…' : '同步中…';
+  const r = await api('/api/sync/github-private' + (dry ? '?dry=true' : ''), { method: 'POST' });
+  out.textContent = r.error ? `错误：${r.error}` : (r.report || JSON.stringify(r));
+}
+
+async function saveSync() {
+  const out = $('sync-out');
+  out.textContent = '保存中…';
+  const r = await api('/api/sync/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      owner: $('sync-owner').value.trim(),
+      repo: $('sync-repo').value.trim(),
+      path: $('sync-path').value.trim(),
+      token: $('sync-token').value.trim(),
+    }),
+  });
+  if (r.error) { out.textContent = `错误：${r.error}`; return; }
+  out.textContent = '已保存并启用';
+  $('sync-token').value = '';
+  refreshSync();
+}
+
+$('sync-dry').addEventListener('click', () => runSync(true));
+$('sync-run').addEventListener('click', () => runSync(false));
+$('sync-save').addEventListener('click', saveSync);
+refreshSync();
+
 boot();
 
 // ---- 新建 --------------------------------------------------------------

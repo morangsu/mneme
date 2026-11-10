@@ -148,6 +148,9 @@ fun MatrixScreen() {
         }
 
         if (loaded && viewDefs.isEmpty()) {
+            // 出错时也要让用户看见：以前错误横幅只画在视图区里，
+            // 开库失败时视图区根本不存在，症状就成了「永远停在读取状态」
+            error?.let { ErrorBanner(it) }
             DomainSetupPanel(onInstalled = { reload++ })
         } else {
             ExposedDropdownMenuBox(

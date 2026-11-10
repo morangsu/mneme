@@ -132,3 +132,20 @@ main {
 #del:hover { color: #e5484d; border-color: #e5484d55; }
 #undo:hover { color: var(--text); }
 #life-note { margin-top: 6px; }
+
+/* 同步面板 */
+#sync-box { margin-top: 12px; border-top: 1px solid var(--divider); padding-top: 8px; }
+#sync-box summary { cursor: pointer; color: var(--text); font-size: 13px; }
+#sync-status { margin: 8px 0; }
+.sync-btns { display: flex; gap: 8px; margin: 8px 0; }
+#sync-out {
+  max-height: 140px; overflow: auto; white-space: pre-wrap;
+  font-size: 11px; margin: 6px 0;
+}
+#sync-form { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+#sync-form input {
+  padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--divider);
+  background: var(--panel-alt); color: var(--text); font: inherit; font-size: 12px;
+}
+#sync-form button { align-self: flex-start; }

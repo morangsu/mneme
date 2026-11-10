@@ -50,8 +50,13 @@ fn run() -> anyhow::Result<()> {
             );
             // 同进程 axum：随机端口 + 每次启动都变的随机 token，仅听 127.0.0.1。
             // token 挡住本机其他进程；`/desktop` 页面本身公开，数据都在带 token 的 API 后面。
+            // 有 sync.json 就直接建同步引擎（桌面端打开即可同步，不用先去设置页）
+            let sync_engine = mneme_server::load_sync_config(
+                &store,
+                &store.root().join("sync.json"),
+            );
             let token = local_token();
-            let state = AppState::new(store, None, Some(token.clone()));
+            let state = AppState::new(store, sync_engine, Some(token.clone()));
             let server = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
