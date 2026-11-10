@@ -33,6 +33,29 @@ const S = {
 };
 try { S.viewMode = localStorage.getItem('mneme.viewMode') === 'cards' ? 'cards' : 'table'; } catch (_) {}
 
+// ---- 领域包引导：库还没有 schema 时显示入口，选 .toml 一键加载 ----------
+// 与手机端首启 setSchema 同口径；加载成功后重新 boot 刷新视图。
+$('domain-init').addEventListener('click', () => $('domain-file').click());
+$('domain-file').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  $('search-note').textContent = `加载 ${f.name} …`;
+  const toml = await f.text();
+  const r = await api('/api/schema/init', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ toml }),
+  });
+  e.target.value = '';
+  if (r.error) {
+    $('search-note').textContent = '加载失败：' + r.error;
+    return;
+  }
+  $('search-note').textContent =
+    `领域 ${r.domain} 已加载：${r.fields} 字段 / ${r.directions} 出题方向 / ${r.views} 视图 / ${r.aliases} 同义`;
+  await boot();
+});
+
 // ---- 启动 -------------------------------------------------------------
 async function boot() {
   // 深链：&group=1 按分组聚合、&mode=cards 卡片模式（配合无头验证与分享）
@@ -50,6 +73,8 @@ async function boot() {
     el.addEventListener('click', () => selectView(+el.dataset.i));
   });
   $('meta').textContent = `${s.entities} 条 · ${s.cards} 张卡 · 事件 ${s.events}`;
+  // 没有 schema 就亮出「加载领域包」入口；加载成功重新 boot 后自动隐藏
+  $('domain-init').hidden = !!s.schema;
   if (S.views.length) selectView(0);
 }
 

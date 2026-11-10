@@ -13,7 +13,8 @@ use axum::{
 };
 use mneme_codec::{self as codec, Format, ImportOptions, ImportStrategy};
 use mneme_core::{
-    ReviewConfig, ReviewEvent, Sm2Scheduler, TermTable, due_cards, fold_events, judge, now_ms,
+    DomainSchema, ReviewConfig, ReviewEvent, Sm2Scheduler, TermAlias, TermTable, due_cards,
+    fold_events, judge, now_ms,
 };
 use mneme_core::{
     Entity as CoreEntity, Group as CoreGroup, Value as CoreValue, MAX_DEPTH,
@@ -136,6 +137,7 @@ pub fn router(state: AppState) -> Router {
         .route("/review-config", get(api_review_config_get))
         .route("/review-config", put(api_review_config_put))
         .route("/import", post(api_import))
+        .route("/schema/init", post(api_schema_init))
         .route("/export", get(api_export))
         .route("/sync/status", get(api_sync_status))
         .route("/sync/{id}", post(api_sync))
@@ -1405,11 +1407,52 @@ async fn api_import(State(s): State<AppState>, Json(b): Json<ImportBody>) -> Jso
     }
 }
 
+#[derive(Deserialize)]
+struct SchemaInitBody {
+    toml: String,
+}
+
+/// 领域包引导：加载 schema + 同义表述（与 mneme-cli init 同一构造，
+/// 与手机端首启 setSchema 同口径）。已有 schema 时需显式 replace 才覆盖。
+async fn api_schema_init(State(s): State<AppState>, Json(b): Json<SchemaInitBody>) -> Json<JsonValue> {
+    let schema = match DomainSchema::from_toml(&b.toml) {
+        Ok(x) => x,
+        Err(e) => return Json(json!({ "error": format!("领域包 TOML 解析失败: {e}") })),
+    };
+    let mut ops = vec![Op::SetSchema { toml: b.toml }];
+    // 领域包里的同义表述一并入库（教材主表述唯一，同义只作命中关键词）
+    for a in &schema.aliases {
+        ops.push(Op::PutAlias {
+            alias: TermAlias {
+                concept: a.concept.clone(),
+                canonical: a.canonical.clone(),
+                aliases: a.aliases.clone(),
+                boundary: a.boundary.clone(),
+                page: a.page,
+            },
+        });
+    }
+    match s.store.mutate(&ops) {
+        Ok(n) => {
+            let def = &schema.entities[0];
+            Json(json!({
+                "ok": true,
+                "applied": n,
+                "domain": schema.name,
+                "fields": def.fields.len(),
+                "directions": def.directions.len(),
+                "views": schema.views.len(),
+                "aliases": schema.aliases.len(),
+            }))
+        }
+        Err(e) => Json(json!({ "error": e.to_string() })),
+    }
+}
+
 async fn api_export(
     State(s): State<AppState>,
     Query(q): Query<HashMap<String, String>>,
-) -> Response {
-    let fmt: Format = q
+) -> Response {    let fmt: Format = q
         .get("format")
         .and_then(|x| Format::from_str(x).ok())
         .unwrap_or(Format::Bundle);

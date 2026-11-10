@@ -21,6 +21,8 @@
   <aside id="side">
     <input type="text" id="q" placeholder="检索：功效 / 性味 / 拼音首字母（mh）" autocomplete="off" />
     <div class="muted" id="search-note">输入即搜；AND 无结果自动改 OR</div>
+    <button id="domain-init" class="ghost" hidden title="选择领域包 .toml（含字段/出题方向/视图/同义表述）">加载领域包（.toml）</button>
+    <input type="file" id="domain-file" accept=".toml" hidden />
     <div id="views"></div>
     <div class="muted" id="meta"></div>
 
