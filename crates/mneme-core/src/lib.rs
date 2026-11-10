@@ -20,6 +20,7 @@ pub mod groups;
 pub mod error;
 pub mod index;
 pub mod merge;
+pub mod edit;
 pub mod paste;
 pub mod pinyin;
 pub mod schema;
@@ -33,6 +34,7 @@ pub use error::{Error, Result};
 pub use groups::{GroupNode, MAX_DEPTH, child_count, path_names, tree as group_tree, would_cycle};
 pub use index::{InvertedIndex, Scored};
 pub use merge::{Diff, EntityChange, FieldChange, MergePolicy, diff_entities, merge_events, three_way};
+pub use edit::{apply_edit, coerce, kind_name};
 pub use paste::{
     Duplicate, PasteBatch, PasteHit, PasteParse, find_duplicates, parse_paste,
     parse_paste_batch,

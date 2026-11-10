@@ -214,7 +214,7 @@ impl Store {
         let mut cache = cardcache::load(&self.root);
         let _t_load = t0.elapsed();
 
-        let (schema_fp, mut missing, mut adopted, any_cache) = {
+        let (schema_fp, missing, adopted, any_cache) = {
             let m = self.mem.read();
             let schema_fp = m.schema_fp();
             let fps = m.block_fps();

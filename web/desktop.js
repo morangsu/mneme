@@ -145,14 +145,63 @@ async function showDetail() {
   if (!it) return;
   const d = await api('/api/entity/' + encodeURIComponent(it.id));
   if (d.error) { $('detail').innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
+  // 可编辑字段直接渲染成输入框：提交后由服务端 apply_edit 做同值过滤
+  // （没变的字段不产生事件），前端不做 diff，避免两端规则分叉。
   $('detail').innerHTML = `
     <h2>${esc(d.title)}</h2>
     <div class="gp">${esc(d.group_path || '未分组')} · rev ${d.rev} · ${esc(d.device)}</div>
-    ${(d.fields || []).map((f) => `
+    ${(d.fields || []).map((f, i) => f.immutable ? `
       <div class="field">
-        <div class="k">${f.immutable ? '<span class="tag imm">原样</span>' : ''}${esc(f.label || f.key)}</div>
+        <div class="k"><span class="tag imm">原样</span>${esc(f.label || f.key)}</div>
         <div class="v">${esc(f.value) || '<span class="muted">（空）</span>'}</div>
-      </div>`).join('')}`;
+      </div>` : `
+      <div class="field">
+        <div class="k">${esc(f.label || f.key)}<span class="muted">（${esc(f.kind)}）</span></div>
+        <textarea class="fin" data-key="${esc(f.key)}" rows="${f.value.length > 40 || f.kind === 'tags' ? 3 : 1}">${esc(f.value)}</textarea>
+      </div>`).join('')}
+    <div class="edit-bar">
+      <button id="save">保存 <span class="muted">Ctrl+Enter</span></button>
+      <span id="save-note"></span>
+    </div>`;
+  $('save').addEventListener('click', saveEdit);
+  $('detail').querySelectorAll('.fin').forEach((t) => {
+    t.dataset.orig = t.value;
+    t.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(); }
+    });
+  });
+}
+
+async function saveEdit() {
+  const it = S.items[S.sel];
+  if (!it) return;
+  const fields = {};
+  let touched = false;
+  $('detail').querySelectorAll('.fin').forEach((t) => {
+    // 只提交真的改过的字段；没改的留在请求外，服务端也不再判一次
+    if (t.value !== t.dataset.orig) { fields[t.dataset.key] = t.value; touched = true; }
+  });
+  const note = $('save-note');
+  if (!touched) { note.textContent = '没有改动'; return; }
+  note.textContent = '保存中…';
+  const r = await api('/api/edit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: it.id, fields }),
+  });
+  if (r.error) { note.textContent = ''; note.innerHTML = `<span class="err">${esc(r.error)}</span>`; return; }
+  if (r.noop) { note.textContent = '没有实际变化'; return; }
+  note.textContent = `已保存 rev ${r.rev}（${(r.changed || []).length} 个字段）`;
+  // 刷新详情与列表：列表里的值可能已过期
+  const sel = S.sel;
+  if (S.mode === 'view' && S.viewId) {
+    S.view = await api('/api/view/' + encodeURIComponent(S.viewId));
+    renderView();
+    S.sel = sel; syncSelection();
+  }
+  showDetail();
+  const btn = $('save');
+  if (btn) btn.blur();
 }
 
 // ---- 键盘 -------------------------------------------------------------
@@ -171,7 +220,11 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (typing) {
-    if (e.key === 'Escape') { $('q').value = ''; $('q').blur(); leaveSearch(); }
+    if (e.key === 'Escape') {
+      // 在编辑框里按 Esc = 放弃这块输入；在检索框里 = 清空并回到视图
+      if (document.activeElement === $('q')) { $('q').value = ''; $('q').blur(); leaveSearch(); }
+      else document.activeElement.blur();
+    }
     return;
   }
   switch (e.key) {

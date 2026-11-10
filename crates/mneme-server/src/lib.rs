@@ -139,6 +139,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/entity/{id}", get(api_entity))
         .route("/api/search", get(api_search))
+        .route("/api/edit", post(api_edit))
+        .route("/api/group", post(api_set_group))
         .nest("/api", api)
         .with_state(state)
 }
@@ -209,6 +211,103 @@ async fn api_entity(State(s): State<AppState>, Path(id): Path<String>) -> Json<J
         return Json(json!({ "error": format!("实体不存在或已删除：{id}") }));
     };
     Json(mneme_core::entity::detail_view(&schema, &e, &groups))
+}
+
+/// 编辑实体：与 FFI 的 `editEntity` 共用 core 的 `apply_edit`（两端口径不分叉）。
+/// 体：`{"id":"麻黄","fields":{"effects":"发汗解表|利水"}}`。
+/// 语义：immutable 拒改、同值不产生事件、全部合法才写。
+async fn api_edit(State(s): State<AppState>, Json(b): Json<EditBody>) -> Json<JsonValue> {
+    if b.fields.is_empty() {
+        return Json(json!({ "error": "没有要修改的字段" }));
+    }
+    let (schema, found) = s.store.read(|m| {
+        (
+            m.schema.clone(),
+            m.entities_vec()
+                .into_iter()
+                .find(|x| x.id == b.id && !x.deleted),
+        )
+    });
+    let Some(schema) = schema else {
+        return Json(json!({ "error": "还没有加载领域 schema" }));
+    };
+    let Some(mut entity) = found else {
+        return Json(json!({ "error": format!("实体不存在或已删除：{}", b.id) }));
+    };
+    let now = now_ms();
+    let (changed, unchanged) = match mneme_core::apply_edit(&schema, &mut entity, &b.fields, now) {
+        Ok(v) => v,
+        Err(e) => return Json(json!({ "error": e })),
+    };
+    if changed.is_empty() {
+        return Json(json!({
+            "ok": true, "id": entity.id, "noop": true,
+            "rev": entity.rev, "changed": [], "unchanged": unchanged,
+        }));
+    }
+    let max_rev = s.store.stats().rev;
+    entity.rev = max_rev + 1;
+    entity.updated_at = now;
+    entity.device = s.store.device().to_string();
+    match s.store.mutate(&[Op::UpsertEntity { entity: entity.clone() }]) {
+        Ok(_) => Json(json!({
+            "ok": true, "id": entity.id, "rev": entity.rev,
+            "changed": changed, "unchanged": unchanged,
+        })),
+        Err(e) => Json(json!({ "error": e.to_string() })),
+    }
+}
+
+/// 把实体挂到某个分组（`group_id` 传空 = 移出分组）。
+/// 与 FFI 的 `setEntityGroup` 同一份 store 实现：校验分组存在、
+/// 有 `group_name` 字段时同步写显示名（视图按它回退）。
+async fn api_set_group(State(s): State<AppState>, Json(b): Json<SetGroupBody>) -> Json<JsonValue> {
+    let gid = b.group_id.trim();
+    let Some(mut e) = s.store.read(|m| m.entities.get(&b.id).cloned()) else {
+        return Json(json!({ "error": format!("实体不存在：{}", b.id) }));
+    };
+    if e.deleted {
+        return Json(json!({ "error": "这条在回收站里，先恢复再分组" }));
+    }
+    let now = now_ms();
+    let label = if gid.is_empty() {
+        e.group_id = None;
+        String::new()
+    } else {
+        let g = s.store.read(|m| {
+            m.groups
+                .values()
+                .find(|g| g.id == gid && !g.deleted)
+                .map(|g| (g.id.clone(), g.name.clone()))
+        });
+        let Some((id, name)) = g else {
+            return Json(json!({ "error": format!("分组不存在：{gid}") }));
+        };
+        e.group_id = Some(id);
+        name
+    };
+    if e.get("group_name").is_some() {
+        e.set("group_name", mneme_core::Value::Text(label.clone()), now);
+    }
+    e.rev = s.store.stats().rev + 1;
+    e.updated_at = now;
+    e.device = s.store.device().to_string();
+    match s.store.mutate(&[Op::UpsertEntity { entity: e }]) {
+        Ok(_) => Json(json!({ "ok": true, "id": b.id, "group_id": gid, "group_name": label })),
+        Err(err) => Json(json!({ "error": err.to_string() })),
+    }
+}
+
+#[derive(Deserialize)]
+struct EditBody {
+    id: String,
+    fields: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct SetGroupBody {
+    id: String,
+    group_id: String,
 }
 
 /// 跨字段检索（与 FFI search 同一份 core 实现）。

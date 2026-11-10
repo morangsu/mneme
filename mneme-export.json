@@ -1,0 +1,524 @@
+{
+  "schema_toml": "# 中药学（第六版 · 钟赣生 / 杨柏灿 主编）\n# 加一门学科只需要这一份 TOML，不改任何 Rust 代码。\nid = \"materia-medica\"\nname = \"中药学\"\nversion = 1\ndescription = \"药群共性做基座，每味药只挂差异标签；功效当索引，应用由功效推；危险区原样记。\"\n\n[[entities]]\nkind = \"herb\"\nlabel = \"药物\"\nprimary = \"name\"\ngroup_kind = \"group\"\n\n[[entities.fields]]\nkey = \"name\"\nlabel = \"药名\"\nkind = \"text\"\nindexable = true\nrequired = true\n\n[[entities.fields]]\nkey = \"group_name\"\nlabel = \"药群\"\nkind = \"text\"\nindexable = true\n\n[[entities.fields]]\nkey = \"effects\"\nlabel = \"功效\"\nkind = \"tags\"\nindexable = true\nreversible = true\nweight = 2.0\n\n[[entities.fields]]\nkey = \"indications\"\nlabel = \"应用\"\nkind = \"tags\"\nindexable = true\nreversible = true\n\n[[entities.fields]]\nkey = \"features\"\nlabel = \"特点锚\"\nkind = \"tags\"\nindexable = true\nreversible = true\nweight = 1.5\n\n[[entities.fields]]\nkey = \"contraindications\"\nlabel = \"禁忌\"\nkind = \"tags\"\nindexable = true\nreversible = true\n\n[[entities.fields]]\nkey = \"nature\"\nlabel = \"性味归经\"\nkind = \"text\"\nimmutable = true\n\n[[entities.fields]]\nkey = \"toxicity\"\nlabel = \"毒性\"\nkind = \"text\"\nimmutable = true\n\n[[entities.fields]]\nkey = \"dosage\"\nlabel = \"用量\"\nkind = \"text\"\nimmutable = true\n\n[[entities.fields]]\nkey = \"compatibility\"\nlabel = \"配伍禁忌\"\nkind = \"text\"\nimmutable = true\n\n[[entities.fields]]\nkey = \"decoction\"\nlabel = \"特殊煎法\"\nkind = \"text\"\nimmutable = true\n\n[[entities.fields]]\nkey = \"differential\"\nlabel = \"相似药鉴别\"\nkind = \"text\"\nimmutable = true\n\n[[entities.fields]]\nkey = \"processing\"\nlabel = \"炮制差异\"\nkind = \"text\"\n\n[[entities.fields]]\nkey = \"canonical\"\nlabel = \"教材主表述\"\nkind = \"text\"\n\n[[entities.fields]]\nkey = \"synonyms\"\nlabel = \"可替换说法\"\nkind = \"tags\"\n\n[[entities.fields]]\nkey = \"boundary\"\nlabel = \"不可替换边界\"\nkind = \"text\"\n\n[[entities.fields]]\nkey = \"mastery\"\nlabel = \"掌握度\"\nkind = \"text\"\n\n# 个人笔记：白名单里早就有 notes，但以前没在领域包里定义，等于无处可写\n[[entities.fields]]\nkey = \"notes\"\nlabel = \"我的笔记\"\nkind = \"text\"\nweight = 0.2\n\n# 「替代了哪一条」：新建修订版时写在**新条目**上，指回旧条目\n[[entities.fields]]\nkey = \"supersedes\"\nlabel = \"替代自\"\nkind = \"text\"\nweight = 0.2\n\n# 反向标记：写在**旧条目**上，指向替代它的新条目。视图靠它隐藏旧版\n# （只查新条目的 supersedes 做不到\"隐藏旧的\"，因为过滤是逐行判定）\n[[entities.fields]]\nkey = \"superseded_by\"\nlabel = \"已被替代为\"\nkind = \"text\"\nweight = 0.2\n\n# 手工覆盖掌握度的时间戳；30 天内派生值不覆盖用户判断\n[[entities.fields]]\nkey = \"mastery_override_at\"\nlabel = \"掌握度手填时间\"\nkind = \"number\"\nweight = 0.2\n\n# 「知道部分回答其余」= 给哪些字段、答哪些字段，声明式描述，引擎自动生成反向卡\n[[entities.directions]]\nid = \"name_to_chain\"\nlabel = \"药名推全链\"\nclue_fields = [\"name\"]\nanswer_fields = [\"effects\", \"indications\", \"features\", \"contraindications\"]\n\n[[entities.directions]]\nid = \"effect_to_name\"\nlabel = \"功效推药名\"\nclue_fields = [\"effects\"]\nanswer_fields = [\"name\"]\nscope = \"group_name\"\nenumerate_if_ambiguous = true\n\n[[entities.directions]]\nid = \"indication_to_name\"\nlabel = \"应用推药名\"\nclue_fields = [\"indications\"]\nanswer_fields = [\"name\", \"effects\"]\nscope = \"group_name\"\nenumerate_if_ambiguous = true\n\n[[entities.directions]]\nid = \"feature_to_name\"\nlabel = \"特点推药名\"\nclue_fields = [\"features\"]\nanswer_fields = [\"name\"]\nscope = \"group_name\"\nenumerate_if_ambiguous = true\n\n[[entities.directions]]\nid = \"contraindication_to_name\"\nlabel = \"禁忌推药名\"\nclue_fields = [\"contraindications\"]\nanswer_fields = [\"name\", \"features\"]\nscope = \"group_name\"\nenumerate_if_ambiguous = true\n\n[[aliases]]\nconcept = \"解表药\"\ncanonical = \"以发散表邪、解除表证为主要功效\"\naliases = [\"发散表邪\", \"解表\"]\nboundary = \"不能写成发汗解肌作总定义\"\n\n[[aliases]]\nconcept = \"发汗解表\"\ncanonical = \"发汗解表\"\naliases = [\"发散表邪\", \"解表\"]\nboundary = \"性味归经、用量、配伍禁忌不合并\"\n\n[[views]]\nid = \"matrix\"\nlabel = \"药群矩阵\"\ncolumns = [\"name\", \"effects\", \"features\", \"indications\"]\ngroup_by = \"group_name\"\n# 被替代的旧条目不在主视图出现（防止修订版和旧版同时看到、练到）\nfilter = { field = \"superseded_by\", op = \"eq\", value = \"\" }\n\n[[views]]\nid = \"danger\"\nlabel = \"危险区（不合并）\"\ncolumns = [\"name\", \"nature\", \"toxicity\", \"dosage\", \"compatibility\", \"decoction\", \"differential\"]\n\n[[views]]\nid = \"diff\"\nlabel = \"考前差异\"\ncolumns = [\"name\", \"effects\", \"features\", \"contraindications\"]\nfilter = { field = \"mastery\", op = \"ne\", value = \"熟练\" }\n\n[[views]]\nid = \"superseded\"\nlabel = \"已被替代\"\ncolumns = [\"name\", \"superseded_by\", \"nature\", \"dosage\"]\nfilter = { field = \"superseded_by\", op = \"ne\", value = \"\" }\n\n[[views]]\nid = \"synonyms\"\nlabel = \"同义表述\"\ncolumns = [\"name\", \"canonical\", \"synonyms\", \"boundary\"]\n\n[[views]]\nid = \"quiz\"\nlabel = \"出题视图\"\ncolumns = [\"name\", \"effects\", \"features\"]\nhidden = [\"name\", \"effects\", \"features\", \"contraindications\"]\n",
+  "entities": [
+    {
+      "id": "BP1",
+      "kind": "herb",
+      "fields": {
+        "effects": [
+          "fx1"
+        ],
+        "name": "BP1"
+      },
+      "rev": 20,
+      "updated_at": 1794238277216,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "BP2",
+      "kind": "herb",
+      "fields": {
+        "effects": [
+          "fx2"
+        ],
+        "name": "BP2"
+      },
+      "rev": 21,
+      "updated_at": 1794238277232,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "BP4",
+      "kind": "herb",
+      "fields": {
+        "name": "BP4"
+      },
+      "rev": 22,
+      "updated_at": 1794238357225,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "BP5",
+      "kind": "herb",
+      "fields": {
+        "effects": [
+          "fx5"
+        ],
+        "name": "BP5"
+      },
+      "rev": 23,
+      "updated_at": 1794238457943,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "NEWHERB",
+      "kind": "herb",
+      "fields": {
+        "effects": [
+          "fx2"
+        ],
+        "name": "NEWHERB"
+      },
+      "rev": 18,
+      "updated_at": 1794237455649,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "TESTPASTE",
+      "kind": "herb",
+      "fields": {
+        "effects": [
+          "newfx"
+        ],
+        "name": "TESTPASTE",
+        "nature": "xxx"
+      },
+      "rev": 19,
+      "updated_at": 1794237455649,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "桂枝",
+      "kind": "herb",
+      "group_id": "发散风寒药",
+      "fields": {
+        "boundary": "性味归经与配伍禁忌不可替换",
+        "canonical": "发汗解表温通经脉助阳化气",
+        "compatibility": "畏赤石脂",
+        "contraindications": [
+          "温热病",
+          "阴虚阳盛",
+          "血热妄行"
+        ],
+        "decoction": "不宜久煎",
+        "differential": "与麻黄鉴别在表虚有汗与表实无汗",
+        "dosage": "3-10g",
+        "effects": [
+          "发汗解表",
+          "温通经脉",
+          "助阳化气"
+        ],
+        "features": [
+          "表虚有汗",
+          "解肌"
+        ],
+        "group_name": "发散风寒药",
+        "indications": [
+          "风寒表虚有汗",
+          "寒凝血滞",
+          "阳虚水停"
+        ],
+        "mastery": "熟悉",
+        "name": "桂枝",
+        "nature": "辛甘温归心肺膀胱经",
+        "processing": "生用",
+        "synonyms": [
+          "解肌",
+          "温通"
+        ],
+        "toxicity": "无"
+      },
+      "source": {
+        "page": 47
+      },
+      "rev": 16,
+      "updated_at": 1794234809234,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "薄荷",
+      "kind": "herb",
+      "group_id": "发散风热药",
+      "fields": {
+        "boundary": "特殊煎法不可替换",
+        "canonical": "疏散风热清利头目利咽透疹疏肝行气",
+        "compatibility": "无特殊",
+        "contraindications": [
+          "表虚自汗",
+          "阴虚血燥"
+        ],
+        "decoction": "后下",
+        "differential": "与荆芥鉴别在辛凉与辛温",
+        "dosage": "3-6g",
+        "effects": [
+          "疏散风热",
+          "清利头目",
+          "利咽透疹",
+          "疏肝行气"
+        ],
+        "features": [
+          "辛凉",
+          "芳香"
+        ],
+        "group_name": "发散风热药",
+        "indications": [
+          "风热表证",
+          "头痛目赤",
+          "咽喉肿痛",
+          "麻疹不透"
+        ],
+        "mastery": "生疏",
+        "name": "薄荷",
+        "nature": "辛凉归肺肝经",
+        "processing": "生用",
+        "synonyms": [
+          "散风热",
+          "清头目"
+        ],
+        "toxicity": "无"
+      },
+      "source": {
+        "page": 62
+      },
+      "rev": 2,
+      "updated_at": 1794229929639,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "麻黄",
+      "kind": "herb",
+      "group_id": "发散风寒药",
+      "fields": {
+        "boundary": "性味归经与用量不可替换",
+        "canonical": "发汗解表宣肺平喘利水消肿",
+        "compatibility": "不宜与洋地黄类同用",
+        "contraindications": [
+          "表虚自汗",
+          "阴虚盗汗",
+          "肾虚喘咳"
+        ],
+        "decoction": "先煎去上沫",
+        "differential": "与桂枝鉴别在表实无汗与表虚有汗",
+        "dosage": "2-10g",
+        "effects": [
+          "发汗解表",
+          "宣肺平喘",
+          "利水消肿"
+        ],
+        "features": [
+          "表实无汗",
+          "发汗力强"
+        ],
+        "group_name": "发散风寒药",
+        "indications": [
+          "风寒表实无汗",
+          "咳喘",
+          "风水水肿"
+        ],
+        "mastery": "生疏",
+        "name": "麻黄",
+        "nature": "辛微苦温归肺膀胱经",
+        "notes": "发汗力强，表虚者慎用；剂量 2-5g",
+        "processing": "发汗生用|平喘蜜炙",
+        "superseded_by": "麻黄（修订）",
+        "synonyms": [
+          "解表",
+          "发散表邪"
+        ],
+        "toxicity": "无"
+      },
+      "source": {
+        "page": 45
+      },
+      "rev": 27,
+      "updated_at": 1794273142989,
+      "device": "DESKTOP-7G1NU9S",
+      "deleted": false
+    },
+    {
+      "id": "麻黄（修订）",
+      "kind": "herb",
+      "fields": {
+        "boundary": "性味归经与用量不可替换",
+        "canonical": "发汗解表宣肺平喘利水消肿",
+        "compatibility": "不宜与洋地黄类同用",
+        "contraindications": [
+          "表虚自汗",
+          "阴虚盗汗",
+          "肾虚喘咳"
+        ],
+        "decoction": "先煎去上沫",
+        "differential": "与桂枝鉴别在表实无汗与表虚有汗",
+        "dosage": "2-10g",
+        "effects": [
+          "发汗解表",
+          "宣肺平喘",
+          "利水消肿"
+        ],
+        "features": [
+          "表实无汗",
+          "发汗力强"
+        ],
+        "group_name": "发散风寒药",
+        "indications": [
+          "风寒表实无汗",
+          "咳喘",
+          "风水水肿"
+        ],
+        "mastery": "生疏",
+        "name": "麻黄（修订）",
+        "nature": "辛微苦温归肺膀胱经",
+        "processing": "发汗生用|平喘蜜炙",
+        "supersedes": "麻黄",
+        "synonyms": [
+          "解表",
+          "发散表邪"
+        ],
+        "toxicity": "无"
+      },
+      "rev": 8,
+      "updated_at": 1794229989659,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "黄芩",
+      "kind": "herb",
+      "group_id": "清热燥湿药",
+      "fields": {
+        "boundary": "性味归经不可替换",
+        "canonical": "清热燥湿泻火解毒止血安胎",
+        "compatibility": "无特殊",
+        "contraindications": [
+          "脾胃虚寒"
+        ],
+        "decoction": "无特殊",
+        "differential": "与黄连鉴别在上焦与中焦",
+        "dosage": "3-10g",
+        "effects": [
+          "清热燥湿",
+          "泻火解毒",
+          "止血",
+          "安胎"
+        ],
+        "features": [
+          "清上焦肺",
+          "善安胎"
+        ],
+        "group_name": "清热燥湿药",
+        "indications": [
+          "湿温暑温",
+          "肺热咳嗽",
+          "血热吐衄",
+          "胎动不安"
+        ],
+        "mastery": "生疏",
+        "name": "黄芩",
+        "nature": "苦寒归肺胆脾胃大肠小肠经",
+        "processing": "生用|酒炙|炭",
+        "synonyms": [
+          "清肺火",
+          "安胎"
+        ],
+        "toxicity": "无"
+      },
+      "source": {
+        "page": 100
+      },
+      "rev": 4,
+      "updated_at": 1794229929639,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "黄芪",
+      "kind": "herb",
+      "group_id": "SEC1",
+      "fields": {
+        "boundary": "用量与配伍不可替换",
+        "canonical": "补气升阳固表止汗利水消肿",
+        "compatibility": "无特殊",
+        "contraindications": [
+          "表实邪盛",
+          "阴虚阳亢",
+          "疮疡初起"
+        ],
+        "decoction": "无特殊",
+        "differential": "与党参鉴别在升阳与健脾",
+        "dosage": "9-30g",
+        "effects": [
+          "补气升阳",
+          "固表止汗",
+          "利水消肿",
+          "生津养血",
+          "托毒排脓",
+          "敛疮生肌"
+        ],
+        "features": [
+          "补而不腻",
+          "升提"
+        ],
+        "group_name": "SEC1",
+        "indications": [
+          "脾虚气虚",
+          "自汗",
+          "气虚水肿",
+          "久溃不敛"
+        ],
+        "mastery": "生疏",
+        "name": "黄芪",
+        "nature": "甘微温归脾肺经",
+        "processing": "生用|蜜炙",
+        "synonyms": [
+          "补气",
+          "固表"
+        ],
+        "toxicity": "无"
+      },
+      "source": {
+        "page": 312
+      },
+      "rev": 26,
+      "updated_at": 1794239959578,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "黄连",
+      "kind": "herb",
+      "group_id": "清热燥湿药",
+      "fields": {
+        "boundary": "性味归经与用量不可替换",
+        "canonical": "清热燥湿泻火解毒",
+        "compatibility": "不宜与洋地黄类同用",
+        "contraindications": [
+          "脾胃虚寒",
+          "阴虚津伤"
+        ],
+        "decoction": "无特殊",
+        "differential": "与黄芩黄柏鉴别在归经与上中下焦",
+        "dosage": "2-5g",
+        "effects": [
+          "清热燥湿",
+          "泻火解毒"
+        ],
+        "features": [
+          "苦寒力强",
+          "清心胃"
+        ],
+        "group_name": "清热燥湿药",
+        "indications": [
+          "湿热痞满",
+          "呕吐吞酸",
+          "泻痢",
+          "高热神昏",
+          "痈肿疔疮"
+        ],
+        "mastery": "生疏",
+        "name": "黄连",
+        "nature": "苦寒归心脾胃肝胆大肠经",
+        "processing": "生用|姜炙|酒炙",
+        "synonyms": [
+          "清心胃火",
+          "燥湿"
+        ],
+        "toxicity": "无"
+      },
+      "source": {
+        "page": 98
+      },
+      "rev": 6,
+      "updated_at": 1794229929639,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    }
+  ],
+  "groups": [
+    {
+      "id": "CH1",
+      "kind": "group",
+      "name": "CH1",
+      "parent": null,
+      "common": {},
+      "rev": 24,
+      "updated_at": 1794239743247,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    },
+    {
+      "id": "SEC1",
+      "kind": "group",
+      "name": "SEC1",
+      "parent": "CH1",
+      "common": {},
+      "rev": 25,
+      "updated_at": 1794239808536,
+      "device": "android-306997d86bfcdb45",
+      "deleted": false
+    }
+  ],
+  "aliases": [],
+  "events": [
+    {
+      "card_id": "25e2cfa8be44a1a64bbd",
+      "ts": 1794232080911,
+      "grade": 1,
+      "device": "android-306997d86bfcdb45",
+      "seq": 0
+    },
+    {
+      "card_id": "a7922dd4e2cf1e495bca",
+      "ts": 1794232083281,
+      "grade": 4,
+      "device": "android-306997d86bfcdb45",
+      "seq": 0
+    },
+    {
+      "card_id": "f74a6a95d1bb2f9e82f7",
+      "ts": 1794232085591,
+      "grade": 4,
+      "device": "android-306997d86bfcdb45",
+      "seq": 0
+    },
+    {
+      "card_id": "46cf44cc9bd8b77bda79",
+      "ts": 1794232536870,
+      "grade": 3,
+      "device": "android-306997d86bfcdb45",
+      "seq": 0
+    },
+    {
+      "card_id": "25e2cfa8be44a1a64bbd",
+      "ts": 1794234353832,
+      "grade": 3,
+      "device": "android-306997d86bfcdb45",
+      "seq": 0
+    },
+    {
+      "card_id": "46cf44cc9bd8b77bda79",
+      "ts": 1794234403517,
+      "grade": 4,
+      "device": "android-306997d86bfcdb45",
+      "seq": 0
+    },
+    {
+      "card_id": "7e6075c3c0712474f0f6",
+      "ts": 1794234430202,
+      "grade": 3,
+      "device": "android-306997d86bfcdb45",
+      "seq": 0
+    },
+    {
+      "card_id": "b3590f0058f0221ef416",
+      "ts": 1794234809234,
+      "grade": 3,
+      "device": "android-306997d86bfcdb45",
+      "seq": 0
+    },
+    {
+      "card_id": "25e2cfa8be44a1a64bbd",
+      "ts": 1794235260066,
+      "grade": 3,
+      "device": "android-306997d86bfcdb45",
+      "seq": 0
+    }
+  ]
+}

@@ -9,10 +9,11 @@
 
 use mneme_codec::{self as codec, Format, ImportOptions, ImportStrategy};
 use mneme_core::{
-    DomainSchema, Entity, FieldKind, ReviewConfig, ReviewEvent, TermTable, Value, daily_queue,
-    find_duplicates, fold_events, generate_choices, judge as judge_answer, mastery_label_ext, now_ms,
-    parse_paste as core_parse_paste, parse_paste_batch as core_parse_paste_batch,
-    suggest_grade as core_suggest_grade, weak_cards as core_weak_cards,
+    DomainSchema, Entity, ReviewConfig, ReviewEvent, TermTable, Value, apply_edit, coerce,
+    daily_queue, find_duplicates, fold_events, generate_choices, judge as judge_answer, kind_name,
+    mastery_label_ext, now_ms, parse_paste as core_parse_paste,
+    parse_paste_batch as core_parse_paste_batch, suggest_grade as core_suggest_grade,
+    weak_cards as core_weak_cards,
 };
 use mneme_store::{Op, Store};
 use mneme_sync::{SyncConfig, SyncEngine, incremental};
@@ -749,47 +750,6 @@ pub fn set_schema(toml: String) -> String {
 
 // ---------------------------------------------------------------- 编辑
 
-fn kind_name(k: FieldKind) -> &'static str {
-    match k {
-        FieldKind::Text => "text",
-        FieldKind::Tag => "tag",
-        FieldKind::Tags => "tags",
-        FieldKind::Number => "number",
-        FieldKind::Bool => "bool",
-    }
-}
-
-/// 把 UI 提交的裸值按字段类型转成 `Value`。
-/// Tags 允许传数组，也允许传 `a|b` / `a、b` 的字符串 —— UI 只有一个输入框。
-fn coerce(kind: FieldKind, raw: &Json) -> Option<Value> {
-    match kind {
-        FieldKind::Tags => match raw {
-            Json::Array(_) => Value::from_raw(kind, raw),
-            Json::String(s) => Some(Value::Tags(
-                s.split(['|', '、'])
-                    .map(str::trim)
-                    .filter(|x| !x.is_empty())
-                    .map(String::from)
-                    .collect(),
-            )),
-            _ => None,
-        },
-        FieldKind::Number => match raw {
-            Json::String(s) => s.trim().parse::<f64>().ok().map(Value::Number),
-            _ => raw.as_f64().map(Value::Number),
-        },
-        FieldKind::Bool => match raw {
-            Json::String(s) => match s.trim() {
-                "true" | "1" | "是" => Some(Value::Bool(true)),
-                "false" | "0" | "否" => Some(Value::Bool(false)),
-                _ => None,
-            },
-            _ => raw.as_bool().map(Value::Bool),
-        },
-        _ => Value::from_raw(kind, raw),
-    }
-}
-
 /// 读单条实体的全部字段（含 `immutable` 标记与当前值），供编辑面板渲染。
 #[uniffi::export]
 pub fn entity_detail(entity_id: String) -> String {
@@ -806,72 +766,13 @@ pub fn entity_detail(entity_id: String) -> String {
     })
 }
 
-/// 编辑核心：无 IO，只按 schema 校验并改内存里的实体。
-/// 拆出来是为了能单测 —— 全局 STATE 只能初始化一次，走不了多条用例。
-///
-/// 返回 `(changed, unchanged)`；任何一条不合法都整体失败，一个字段也不改。
-fn apply_edit(
-    schema: &DomainSchema,
-    entity: &mut Entity,
-    patch: &BTreeMap<String, Json>,
-    now: i64,
-) -> std::result::Result<(Vec<Json>, Vec<Json>), String> {
-    let Some(def) = schema.entity_def(&entity.kind) else {
-        return Err(format!("领域包缺少 {} 的定义", entity.kind));
-    };
-    let mut changed: Vec<Json> = Vec::new();
-    let mut unchanged: Vec<Json> = Vec::new();
-    let mut blocked: Vec<String> = Vec::new();
-    let mut bad: Vec<String> = Vec::new();
-
-    // 先在副本上改，全部合法才回写，避免「改了一半报错」
-    let mut staged = entity.clone();
-    for (key, raw) in patch {
-        let Some(f) = def.fields.iter().find(|f| f.key == *key) else {
-            return Err(format!("未知字段：{key}"));
-        };
-        if f.immutable {
-            blocked.push(if f.label.is_empty() { f.key.clone() } else { f.label.clone() });
-            continue;
-        }
-        let Some(val) = coerce(f.kind, raw) else {
-            bad.push(format!("{}（需要 {}）", f.key, kind_name(f.kind)));
-            continue;
-        };
-        if entity.get(key) == Some(&val) {
-            unchanged.push(json!(key));
-            continue;
-        }
-        let before = entity.get(key).map(|v| v.display()).unwrap_or_default();
-        let after = val.display();
-        staged.set(key.clone(), val, now);
-        changed.push(json!({
-            "key": key,
-            "label": if f.label.is_empty() { f.key.clone() } else { f.label.clone() },
-            "before": before,
-            "after": after,
-        }));
-    }
-
-    if !blocked.is_empty() {
-        return Err(format!("原样字段不可修改（需新建条目）：{}", blocked.join("、")));
-    }
-    if !bad.is_empty() {
-        return Err(format!("以下字段的值类型不对：{}", bad.join("；")));
-    }
-    if changed.is_empty() {
-        return Ok((changed, unchanged));
-    }
-    *entity = staged;
-    Ok((changed, unchanged))
-}
-
 /// 批量改一条实体的字段。`fields_json` 形如 `{"effects":"a|b","dosage":"3-10g"}`。
 ///
 /// - `immutable` 字段一律拒改（性味归经、用量、配伍禁忌这类「原样字段」），
 ///   报错里列出具体字段名，UI 据此提示「需新建条目」。
 /// - 值没变化的字段不产生事件（`unchanged`），避免无意义的 rev 增长与同步流量。
 /// - 全部是合法改动才写；只写一条 `UpsertEntity`，`rev` 取库内最大值 +1。
+/// - 校验实现在 core（`apply_edit`），server 的 `/api/edit` 用同一份。
 #[uniffi::export]
 pub fn edit_entity(entity_id: String, fields_json: String) -> String {
     call(|a| {
@@ -917,8 +818,6 @@ pub fn edit_entity(entity_id: String, fields_json: String) -> String {
         }
     })
 }
-
-// ---------------------------------------------------------------- 新建 / 删除 / 历史
 
 /// 把一段中文文本解析成字段（「标签：值」/ 制表符 / 「标签 值」都认）。
 ///
@@ -1936,6 +1835,7 @@ pub fn upstream_adopt() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mneme_core::FieldKind;
     use mneme_core::{Value, normalize};
 
     #[test]
