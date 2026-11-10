@@ -64,7 +64,12 @@ async function selectView(i) {
 function renderView() {
   const v = S.view;
   const rows = v.rows || [];
-  S.items = rows.map((r) => ({ id: r._id, title: r[v.primary] || r._id }));
+  // 视图行的主键在不同领域包里可能是 _id / id / 主字段；缺一不可回退，
+  // 否则首屏自动开详情会打到 /api/entity/undefined。
+  S.items = rows.map((r) => ({
+    id: r._id ?? r.id ?? r[v.primary] ?? '',
+    title: r[v.primary] || r._id || '',
+  }));
   S.sel = S.items.length ? 0 : -1;
   const cap = 500;
   const shown = rows.slice(0, cap);
@@ -143,7 +148,10 @@ function syncSelection() {
 
 async function showDetail() {
   const it = S.items[S.sel];
-  if (!it) return;
+  if (!it || !it.id) {
+    $('detail').innerHTML = '<div class="muted">选择一条查看详情</div>';
+    return;
+  }
   const d = await api('/api/entity/' + encodeURIComponent(it.id));
   if (d.error) { $('detail').innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
   // 可编辑字段直接渲染成输入框：提交后由服务端 apply_edit 做同值过滤
@@ -346,18 +354,18 @@ async function openCreate() {
   const mask = document.createElement('div');
   mask.id = 'create-mask';
   mask.style.cssText =
-    'position:fixed;inset:0;background:rgba(10,11,13,.7);display:flex;' +
+    'position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;' +
     'align-items:center;justify-content:center;z-index:50';
   mask.innerHTML = `
-    <form id="create-form" style="background:var(--panel);padding:20px;border-radius:12px;width:min(92vw,460px);max-height:86vh;overflow:auto;display:flex;flex-direction:column;gap:10px">
+    <form id="create-form" style="background:var(--md-surface-container-low);padding:var(--space-xl);border-radius:var(--shape-l);width:min(92vw,460px);max-height:86vh;overflow:auto;display:flex;flex-direction:column;gap:10px">
       <b>新建${t.kinds.length > 1 ? '（' + esc(t.kind) + '）' : ''}</b>
       ${t.fields.filter((f) => !f.immutable || f.key === t.primary).map((f) => `
         <label style="display:flex;flex-direction:column;gap:4px;font-size:12px">
           ${esc(f.label || f.key)}${f.required ? '<span class="muted">（必填）</span>' : ''}
           <input class="cfin" data-key="${esc(f.key)}" autocomplete="off"
-                 style="padding:7px 9px;border-radius:6px;border:1px solid var(--divider);background:var(--panel-alt);color:var(--text)" />
+                 style="padding:7px 9px;border-radius:6px;border:1px solid var(--md-outline);background:var(--md-surface-container);color:var(--md-on-surface)" />
         </label>`).join('')}
-      <div id="create-err" style="color:#e5484d;font-size:12px"></div>
+      <div id="create-err" style="color:var(--md-error);font-size:var(--type-body-medium-size)"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button type="button" id="create-cancel" class="ghost">取消</button>
         <button type="submit" id="create-ok">创建</button>
@@ -391,3 +399,22 @@ async function openCreate() {
     showDetail();
   });
 }
+
+// ---- 密度档：舒适 / 紧凑 -------------------------------------------------
+// 只切换 --row-pad / --pane-pad / --font-base 三个变量，组件不必各写一套样式。
+(function initDensity() {
+  const btn = $('density');
+  if (!btn) return;
+  const apply = (v) => {
+    document.body.dataset.density = v;
+    btn.textContent = v === 'compact' ? '舒适' : '紧凑';
+    btn.title = v === 'compact' ? '切换到舒适密度' : '切换到紧凑密度';
+    try { localStorage.setItem('mneme.density', v); } catch (_) {}
+  };
+  let saved = 'comfortable';
+  try { saved = localStorage.getItem('mneme.density') || 'comfortable'; } catch (_) {}
+  apply(saved === 'compact' ? 'compact' : 'comfortable');
+  btn.addEventListener('click', () => {
+    apply(document.body.dataset.density === 'compact' ? 'comfortable' : 'compact');
+  });
+})();

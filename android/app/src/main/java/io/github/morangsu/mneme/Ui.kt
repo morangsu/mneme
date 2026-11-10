@@ -21,12 +21,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Text
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -34,37 +37,116 @@ import androidx.compose.ui.unit.sp
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** 与 Win 端网页一致的深色配色（见 res/values/colors.xml）。 */
+/**
+ * 旧色名别名。真值在 ThemeTokens.kt（由 design/tokens.json 生成），
+ * 这里保留旧名是为了让 14 个屏幕文件不用逐个改、也不会漏掉某一处硬编码。
+ * 新代码请直接用 MnemeTokens 的 Material 3 语义槽位。
+ */
 object MnemeColors {
-    val Bg = Color(0xFF16171A)
-    val Panel = Color(0xFF1E2024)
-    val PanelAlt = Color(0xFF24272C)
-    val Text = Color(0xFFE6E7EA)
-    val TextDim = Color(0xFF9A9CA3)
-    val Accent = Color(0xFF6AA9FF)
-    val Divider = Color(0xFF2C2F35)
-    val Danger = Color(0xFFFF8A80)
-    val Warn = Color(0xFFFFCC80)
-    val Ok = Color(0xFF81C784)
+    val Bg = MnemeTokens.Background
+    val Panel = MnemeTokens.SurfaceContainerLow
+    val PanelAlt = MnemeTokens.SurfaceContainer
+    val Text = MnemeTokens.OnSurface
+    val TextDim = MnemeTokens.OnSurfaceVariant
+    val Accent = MnemeTokens.Primary
+    val Divider = MnemeTokens.OutlineVariant
+    val Danger = MnemeTokens.Error
+    val Warn = MnemeTokens.Warning
+    val Ok = MnemeTokens.Success
 }
 
 private val DarkScheme = darkColorScheme(
-    primary = MnemeColors.Accent,
-    onPrimary = MnemeColors.Bg,
-    secondary = MnemeColors.Accent,
-    background = MnemeColors.Bg,
-    onBackground = MnemeColors.Text,
-    surface = MnemeColors.Panel,
-    onSurface = MnemeColors.Text,
-    surfaceVariant = MnemeColors.PanelAlt,
-    onSurfaceVariant = MnemeColors.TextDim,
-    outline = MnemeColors.Divider,
-    error = MnemeColors.Danger,
+    primary = MnemeTokens.Primary,
+    onPrimary = MnemeTokens.OnPrimary,
+    primaryContainer = MnemeTokens.PrimaryContainer,
+    onPrimaryContainer = MnemeTokens.OnPrimaryContainer,
+    inversePrimary = MnemeTokens.InversePrimary,
+    secondary = MnemeTokens.Secondary,
+    onSecondary = MnemeTokens.OnSecondary,
+    secondaryContainer = MnemeTokens.SecondaryContainer,
+    onSecondaryContainer = MnemeTokens.OnSecondaryContainer,
+    tertiary = MnemeTokens.Tertiary,
+    onTertiary = MnemeTokens.OnTertiary,
+    tertiaryContainer = MnemeTokens.SuccessContainer,
+    onTertiaryContainer = MnemeTokens.OnSurface,
+    background = MnemeTokens.Background,
+    onBackground = MnemeTokens.OnBackground,
+    surface = MnemeTokens.Surface,
+    onSurface = MnemeTokens.OnSurface,
+    surfaceVariant = MnemeTokens.SurfaceVariant,
+    onSurfaceVariant = MnemeTokens.OnSurfaceVariant,
+    surfaceTint = MnemeTokens.Primary,
+    inverseSurface = MnemeTokens.InverseSurface,
+    inverseOnSurface = MnemeTokens.InverseOnSurface,
+    error = MnemeTokens.Error,
+    onError = MnemeTokens.OnError,
+    errorContainer = MnemeTokens.ErrorContainer,
+    onErrorContainer = MnemeTokens.OnErrorContainer,
+    outline = MnemeTokens.Outline,
+    outlineVariant = MnemeTokens.OutlineVariant,
+    scrim = MnemeTokens.Scrim,
+)
+
+/** 字阶来自 tokens：与桌面 CSS 的 --type-* 一一对应。 */
+private val MnemeTypography = Typography(
+    displaySmall = TextStyle(
+        fontSize = MnemeTokens.Type.DisplaySmallSize.sp,
+        lineHeight = MnemeTokens.Type.DisplaySmallLine.sp,
+        fontWeight = FontWeight.Normal,
+    ),
+    headlineSmall = TextStyle(
+        fontSize = MnemeTokens.Type.HeadlineSmallSize.sp,
+        lineHeight = MnemeTokens.Type.HeadlineSmallLine.sp,
+        fontWeight = FontWeight.Normal,
+    ),
+    titleLarge = TextStyle(
+        fontSize = MnemeTokens.Type.TitleLargeSize.sp,
+        lineHeight = MnemeTokens.Type.TitleLargeLine.sp,
+        fontWeight = FontWeight.Medium,
+    ),
+    titleMedium = TextStyle(
+        fontSize = MnemeTokens.Type.TitleMediumSize.sp,
+        lineHeight = MnemeTokens.Type.TitleMediumLine.sp,
+        fontWeight = FontWeight.Medium,
+    ),
+    bodyLarge = TextStyle(
+        fontSize = MnemeTokens.Type.BodyLargeSize.sp,
+        lineHeight = MnemeTokens.Type.BodyLargeLine.sp,
+        fontWeight = FontWeight.Normal,
+    ),
+    bodyMedium = TextStyle(
+        fontSize = MnemeTokens.Type.BodyMediumSize.sp,
+        lineHeight = MnemeTokens.Type.BodyMediumLine.sp,
+        fontWeight = FontWeight.Normal,
+    ),
+    labelLarge = TextStyle(
+        fontSize = MnemeTokens.Type.LabelLargeSize.sp,
+        lineHeight = MnemeTokens.Type.LabelLargeLine.sp,
+        fontWeight = FontWeight.Medium,
+    ),
+    labelSmall = TextStyle(
+        fontSize = MnemeTokens.Type.LabelSmallSize.sp,
+        lineHeight = MnemeTokens.Type.LabelSmallLine.sp,
+        fontWeight = FontWeight.Medium,
+    ),
+)
+
+private val MnemeShapes = Shapes(
+    extraSmall = RoundedCornerShape(MnemeTokens.Shape.Xs),
+    small = RoundedCornerShape(MnemeTokens.Shape.S),
+    medium = RoundedCornerShape(MnemeTokens.Shape.M),
+    large = RoundedCornerShape(MnemeTokens.Shape.L),
+    extraLarge = RoundedCornerShape(MnemeTokens.Shape.Xl),
 )
 
 @Composable
 fun MnemeTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = DarkScheme, content = content)
+    MaterialTheme(
+        colorScheme = DarkScheme,
+        typography = MnemeTypography,
+        shapes = MnemeShapes,
+        content = content,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +177,7 @@ fun JSONObject.arrayOrEmpty(vararg keys: String): JSONArray {
 }
 
 // ---------------------------------------------------------------------------
-// 共用组件
+// 共用组件：一律走 Material 3 语义槽位，状态层由 MaterialTheme 提供
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -107,10 +189,10 @@ fun Panel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(MnemeColors.Panel, RoundedCornerShape(12.dp))
-            .border(1.dp, MnemeColors.Divider, RoundedCornerShape(12.dp))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .background(MnemeTokens.SurfaceContainerLow, RoundedCornerShape(MnemeTokens.Shape.L))
+            .border(1.dp, MnemeTokens.OutlineVariant, RoundedCornerShape(MnemeTokens.Shape.L))
+            .padding(MnemeTokens.Space.M),
+        verticalArrangement = Arrangement.spacedBy(MnemeTokens.Space.S),
     ) {
         if (title != null) SectionTitle(title)
         content()
@@ -119,23 +201,33 @@ fun Panel(
 
 @Composable
 fun SectionTitle(text: String) {
-    Text(text, color = MnemeColors.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+    Text(
+        text,
+        color = MnemeTokens.OnSurface,
+        fontSize = MnemeTokens.Type.TitleMediumSize.sp,
+        fontWeight = FontWeight.Medium,
+    )
 }
 
 @Composable
 fun Dim(text: String, modifier: Modifier = Modifier) {
-    Text(text, color = MnemeColors.TextDim, fontSize = 12.sp, modifier = modifier)
+    Text(
+        text,
+        color = MnemeTokens.OnSurfaceVariant,
+        fontSize = MnemeTokens.Type.BodyMediumSize.sp,
+        modifier = modifier,
+    )
 }
 
 @Composable
-fun Badge(text: String, color: Color = MnemeColors.Accent) {
+fun Badge(text: String, color: Color = MnemeTokens.Primary) {
     Text(
         text,
         color = color,
-        fontSize = 10.sp,
+        fontSize = MnemeTokens.Type.LabelSmallSize.sp,
         modifier = Modifier
-            .background(color.copy(alpha = 0.14f), RoundedCornerShape(4.dp))
-            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+            .background(color.copy(alpha = MnemeTokens.Alpha.Selected), RoundedCornerShape(MnemeTokens.Shape.Xs))
+            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(MnemeTokens.Shape.Xs))
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }
@@ -144,25 +236,25 @@ fun Badge(text: String, color: Color = MnemeColors.Accent) {
 fun ErrorBanner(message: String) {
     Text(
         "⚠ $message",
-        color = MnemeColors.Danger,
-        fontSize = 12.sp,
+        color = MnemeTokens.OnErrorContainer,
+        fontSize = MnemeTokens.Type.BodyMediumSize.sp,
         modifier = Modifier
             .fillMaxWidth()
-            .background(MnemeColors.Danger.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
-            .padding(8.dp),
+            .background(MnemeTokens.ErrorContainer, RoundedCornerShape(MnemeTokens.Shape.S))
+            .padding(MnemeTokens.Space.S),
     )
 }
 
 @Composable
 fun LoadingBox() {
     Row(
-        modifier = Modifier.padding(12.dp),
+        modifier = Modifier.padding(MnemeTokens.Space.M),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         CircularProgressIndicator(
             modifier = Modifier.size(18.dp),
-            color = MnemeColors.Accent,
+            color = MnemeTokens.Primary,
             strokeWidth = 2.dp,
         )
         Dim("加载中…")
@@ -181,13 +273,13 @@ fun AccentButton(
         enabled = enabled,
         modifier = modifier,
         colors = ButtonDefaults.buttonColors(
-            containerColor = MnemeColors.Accent,
-            contentColor = MnemeColors.Bg,
-            disabledContainerColor = MnemeColors.PanelAlt,
-            disabledContentColor = MnemeColors.TextDim,
+            containerColor = MnemeTokens.Primary,
+            contentColor = MnemeTokens.OnPrimary,
+            disabledContainerColor = MnemeTokens.SurfaceContainer,
+            disabledContentColor = MnemeTokens.OnSurfaceVariant.copy(alpha = MnemeTokens.Alpha.DisabledContent),
         ),
     ) {
-        Text(text, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        Text(text, fontWeight = FontWeight.Medium, fontSize = MnemeTokens.Type.LabelLargeSize.sp)
     }
 }
 
@@ -202,13 +294,13 @@ fun GhostButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier,
-        border = BorderStroke(1.dp, MnemeColors.Divider),
+        border = BorderStroke(1.dp, MnemeTokens.Outline),
         colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = MnemeColors.Accent,
-            disabledContentColor = MnemeColors.TextDim,
+            contentColor = MnemeTokens.Primary,
+            disabledContentColor = MnemeTokens.OnSurfaceVariant.copy(alpha = MnemeTokens.Alpha.DisabledContent),
         ),
     ) {
-        Text(text, fontSize = 13.sp)
+        Text(text, fontSize = MnemeTokens.Type.LabelLargeSize.sp)
     }
 }
 
@@ -225,16 +317,28 @@ fun MnemeTextField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        label = { Text(label, color = MnemeColors.TextDim, fontSize = 12.sp) },
+        label = {
+            Text(
+                label,
+                color = MnemeTokens.OnSurfaceVariant,
+                fontSize = MnemeTokens.Type.BodyMediumSize.sp,
+            )
+        },
         modifier = modifier.fillMaxWidth(),
         singleLine = singleLine,
         maxLines = maxLines,
-        textStyle = LocalTextStyle.current.copy(color = MnemeColors.Text, fontSize = 14.sp),
+        shape = RoundedCornerShape(MnemeTokens.Shape.S),
+        textStyle = LocalTextStyle.current.copy(
+            color = MnemeTokens.OnSurface,
+            fontSize = MnemeTokens.Type.BodyLargeSize.sp,
+        ),
         colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = MnemeColors.Accent,
-            unfocusedBorderColor = MnemeColors.Divider,
-            focusedLabelColor = MnemeColors.Accent,
-            cursorColor = MnemeColors.Accent,
+            focusedBorderColor = MnemeTokens.Primary,
+            unfocusedBorderColor = MnemeTokens.Outline,
+            disabledBorderColor = MnemeTokens.OutlineVariant,
+            focusedLabelColor = MnemeTokens.Primary,
+            unfocusedLabelColor = MnemeTokens.OnSurfaceVariant,
+            cursorColor = MnemeTokens.Primary,
             focusedContainerColor = Color.Transparent,
             unfocusedContainerColor = Color.Transparent,
         ),
@@ -252,14 +356,14 @@ fun Receipt(obj: JSONObject, skipKeys: Set<String> = setOf("error")) {
             Row(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     k,
-                    color = MnemeColors.TextDim,
-                    fontSize = 12.sp,
+                    color = MnemeTokens.OnSurfaceVariant,
+                    fontSize = MnemeTokens.Type.BodyMediumSize.sp,
                     modifier = Modifier.width(104.dp),
                 )
                 Text(
                     obj.readable(k).ifBlank { "—" },
-                    color = MnemeColors.Text,
-                    fontSize = 12.sp,
+                    color = MnemeTokens.OnSurface,
+                    fontSize = MnemeTokens.Type.BodyMediumSize.sp,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )

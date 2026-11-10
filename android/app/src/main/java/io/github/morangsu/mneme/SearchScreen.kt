@@ -82,12 +82,13 @@ fun SearchScreen(onDismiss: () -> Unit, onOpen: (String) -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(12.dp),
+                    .padding(MnemeTokens.Space.M),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                SectionTitle("检索")
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(MnemeTokens.Space.S),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     GhostButton("返回", onClick = onDismiss)
@@ -95,16 +96,25 @@ fun SearchScreen(onDismiss: () -> Unit, onOpen: (String) -> Unit) {
                         value = query,
                         onValueChange = { query = it },
                         label = {
-                            Text("搜索药名 / 功效 / 性味 / 别名（可用拼音首字母 mh）", color = MnemeColors.TextDim, fontSize = 12.sp)
+                            Text(
+                                "搜索药名 / 功效 / 性味 / 别名（可用拼音首字母 mh）",
+                                color = MnemeTokens.OnSurfaceVariant,
+                                fontSize = MnemeTokens.Type.BodyMediumSize.sp,
+                            )
                         },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
-                        textStyle = LocalTextStyle.current.copy(color = MnemeColors.Text, fontSize = 15.sp),
+                        shape = RoundedCornerShape(MnemeTokens.Shape.S),
+                        textStyle = LocalTextStyle.current.copy(
+                            color = MnemeTokens.OnSurface,
+                            fontSize = MnemeTokens.Type.TitleMediumSize.sp,
+                        ),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MnemeColors.Accent,
-                            unfocusedBorderColor = MnemeColors.Divider,
-                            focusedLabelColor = MnemeColors.Accent,
-                            cursorColor = MnemeColors.Accent,
+                            focusedBorderColor = MnemeTokens.Primary,
+                            unfocusedBorderColor = MnemeTokens.Outline,
+                            focusedLabelColor = MnemeTokens.Primary,
+                            unfocusedLabelColor = MnemeTokens.OnSurfaceVariant,
+                            cursorColor = MnemeTokens.Primary,
                         ),
                     )
                 }

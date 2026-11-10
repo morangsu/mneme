@@ -31,16 +31,16 @@ function showLogin() {
   const mask = document.createElement('div');
   mask.id = 'login-mask';
   mask.style.cssText =
-    'position:fixed;inset:0;background:rgba(10,11,13,.82);display:flex;' +
+    'position:fixed;inset:0;background:rgba(0,0,0,.82);display:flex;' +
     'align-items:center;justify-content:center;z-index:99';
   mask.innerHTML = `
-    <form id="login-form" style="background:#1e2024;padding:24px;border-radius:12px;width:min(92vw,360px);display:flex;flex-direction:column;gap:12px">
+    <form id="login-form" style="background:var(--md-surface-container-low);padding:var(--space-xl);border-radius:var(--shape-l);width:min(92vw,360px);display:flex;flex-direction:column;gap:12px">
       <b style="font-size:16px">mneme 登录</b>
       <span class="muted">输入访问口令（同一次输入保持 12 小时）</span>
       <input type="password" id="login-token" autocomplete="current-password"
-             style="padding:10px;border-radius:8px;border:1px solid #3a3d44;background:#16171a;color:#e6e7ea" />
-      <div id="login-err" class="muted" style="color:#e5484d"></div>
-      <button type="submit" style="padding:10px;border-radius:8px;border:none;background:#6aa9ff;color:#16171a;font-weight:600">登录</button>
+             style="padding:var(--space-m);border-radius:var(--shape-s);border:1px solid var(--md-outline);background:var(--md-surface-container-lowest);color:var(--md-on-surface)" />
+      <div id="login-err" class="muted" style="color:var(--md-error)"></div>
+      <button type="submit" style="padding:var(--space-m);border-radius:var(--shape-s);border:none;background:var(--md-primary);color:var(--md-on-primary);font-weight:500">登录</button>
     </form>`;
   document.body.appendChild(mask);
   $('login-token').focus();

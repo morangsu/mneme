@@ -1,14 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 与 Win 端网页一致的深色配色；Compose 侧在 Ui.kt 用同名常量再声明一份 -->
+<!-- 由 tools/gen-theme.mjs 从 design/tokens.json 生成，请勿手改 -->
 <resources>
-    <color name="bg">#FF16171A</color>        <!-- 背景 -->
-    <color name="panel">#FF1E2024</color>     <!-- 面板 -->
-    <color name="panel_alt">#FF24272C</color> <!-- 面板次级 / 选中态 -->
-    <color name="text">#FFE6E7EA</color>      <!-- 主文字 -->
-    <color name="text_dim">#FF9A9CA3</color>  <!-- 次要文字 -->
-    <color name="accent">#FF6AA9FF</color>    <!-- 强调 -->
-    <color name="divider">#FF2C2F35</color>   <!-- 分隔线 -->
-    <color name="danger">#FFFF8A80</color>    <!-- 危险 / 不可改 -->
-    <color name="warn">#FFFFCC80</color>      <!-- 提醒 / 原样 -->
-    <color name="ok">#FF81C784</color>        <!-- 成功 / 两者都留 -->
+    <color name="md_primary">#FF6AA9FF</color>
+    <color name="md_on_primary">#FF0B1A2B</color>
+    <color name="md_primary_container">#FF1D3A5C</color>
+    <color name="md_on_primary_container">#FFD6E8FF</color>
+    <color name="md_secondary">#FF8FAFD8</color>
+    <color name="md_on_secondary">#FF0B1A2B</color>
+    <color name="md_secondary_container">#FF253448</color>
+    <color name="md_on_secondary_container">#FFDCE9F7</color>
+    <color name="md_tertiary">#FF81C784</color>
+    <color name="md_on_tertiary">#FF0B2A10</color>
+    <color name="md_background">#FF16171A</color>
+    <color name="md_on_background">#FFE6E7EA</color>
+    <color name="md_surface">#FF16171A</color>
+    <color name="md_on_surface">#FFE6E7EA</color>
+    <color name="md_surface_variant">#FF24272C</color>
+    <color name="md_on_surface_variant">#FF9A9CA3</color>
+    <color name="md_surface_container_lowest">#FF121316</color>
+    <color name="md_surface_container_low">#FF1E2024</color>
+    <color name="md_surface_container">#FF24272C</color>
+    <color name="md_surface_container_high">#FF2C2F35</color>
+    <color name="md_surface_container_highest">#FF34383F</color>
+    <color name="md_outline">#FF3A3E46</color>
+    <color name="md_outline_variant">#FF2C2F35</color>
+    <color name="md_error">#FFFF8A80</color>
+    <color name="md_on_error">#FF2A0B0B</color>
+    <color name="md_error_container">#FF4A2320</color>
+    <color name="md_on_error_container">#FFFFDAD6</color>
+    <color name="md_warning">#FFFFCC80</color>
+    <color name="md_warning_container">#FF4A3A22</color>
+    <color name="md_success">#FF81C784</color>
+    <color name="md_success_container">#FF1F3A24</color>
+    <color name="md_scrim">#FF000000</color>
+    <color name="md_inverse_surface">#FFE6E7EA</color>
+    <color name="md_inverse_on_surface">#FF16171A</color>
+    <color name="md_inverse_primary">#FF185FA5</color>
+
+    <!-- 兼容旧名：themes.xml 仍用 @color/bg 等 -->
+    <color name="bg">#FF16171A</color>
+    <color name="panel">#FF1E2024</color>
+    <color name="panel_alt">#FF24272C</color>
+    <color name="text">#FFE6E7EA</color>
+    <color name="text_dim">#FF9A9CA3</color>
+    <color name="accent">#FF6AA9FF</color>
+    <color name="divider">#FF2C2F35</color>
+    <color name="danger">#FFFF8A80</color>
+    <color name="warn">#FFFFCC80</color>
+    <color name="ok">#FF81C784</color>
 </resources>

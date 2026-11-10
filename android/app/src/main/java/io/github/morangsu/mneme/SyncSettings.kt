@@ -52,16 +52,10 @@ fun SyncSettingsPanel(onSaved: () -> Unit = {}) {
             else "personal access token（ghp_… / github_pat_…）",
             singleLine = true,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MnemeTextField(
-                owner, { owner = it.trim() }, "owner",
-                modifier = Modifier.weight(1f), singleLine = true,
-            )
-            MnemeTextField(
-                repo, { repo = it.trim() }, "repo",
-                modifier = Modifier.weight(1f), singleLine = true,
-            )
-        }
+        // 两列并排时长的私有仓库名会被裁掉（mneme-data-private 少了尾巴），
+        // 改成各占一行，表单可读性优先于省一屏高度。
+        MnemeTextField(owner, { owner = it.trim() }, "owner", singleLine = true)
+        MnemeTextField(repo, { repo = it.trim() }, "repo", singleLine = true)
         MnemeTextField(path, { path = it.trim() }, "仓库内路径（留空为根）", singleLine = true)
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

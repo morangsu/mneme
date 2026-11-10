@@ -130,19 +130,21 @@ fun MatrixScreen() {
                 if (s.optInt("entities") > 0) {
                     Text("点任意一行可编辑；「原样」字段不可改", color = MnemeColors.TextDim, fontSize = 11.sp)
                 }
-                // 四个按钮在 1080px 屏放不下一行（「回收站」会被裁掉），横向可滑
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    GhostButton("检索", onClick = { searching = true })
-                    GhostButton("＋ 新建", onClick = { creating = true })
-                    GhostButton("批量粘贴", onClick = { batchPaste = true })
-                    GhostButton("分组", onClick = { groupMgr = true })
-                    GhostButton(
-                        "回收站 (${s.optInt("recycle")})",
-                        onClick = { recycle = true },
-                    )
+                // 五个按钮在 1080px 屏放不下一行：旧版靠横向滚动，用户看不出还能滑，
+                // 「分组 / 回收站」等于被裁掉。按 M3 组件规范分两行，全部可见。
+                Column(verticalArrangement = Arrangement.spacedBy(MnemeTokens.Space.S)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(MnemeTokens.Space.S)) {
+                        GhostButton("检索", onClick = { searching = true })
+                        GhostButton("＋ 新建", onClick = { creating = true })
+                        GhostButton("批量粘贴", onClick = { batchPaste = true })
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(MnemeTokens.Space.S)) {
+                        GhostButton("分组", onClick = { groupMgr = true })
+                        GhostButton(
+                            "回收站 (${s.optInt("recycle")})",
+                            onClick = { recycle = true },
+                        )
+                    }
                 }
             }
         }

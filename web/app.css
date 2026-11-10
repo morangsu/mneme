@@ -1,47 +1,291 @@
+/* === generated from design/tokens.json by tools/gen-theme.mjs - do not edit === */
 :root {
-  --bg: #16171a; --panel: #1e2024; --panel2: #24262b; --line: #33363d;
-  --text: #e6e7ea; --muted: #9aa0aa; --accent: #6aa9ff;
-  --ok: #4ec9a0; --warn: #e0b050; --bad: #e06c6c;
+  --md-primary: #6AA9FF;
+  --md-on-primary: #0B1A2B;
+  --md-primary-container: #1D3A5C;
+  --md-on-primary-container: #D6E8FF;
+  --md-secondary: #8FAFD8;
+  --md-on-secondary: #0B1A2B;
+  --md-secondary-container: #253448;
+  --md-on-secondary-container: #DCE9F7;
+  --md-tertiary: #81C784;
+  --md-on-tertiary: #0B2A10;
+  --md-background: #16171A;
+  --md-on-background: #E6E7EA;
+  --md-surface: #16171A;
+  --md-on-surface: #E6E7EA;
+  --md-surface-variant: #24272C;
+  --md-on-surface-variant: #9A9CA3;
+  --md-surface-container-lowest: #121316;
+  --md-surface-container-low: #1E2024;
+  --md-surface-container: #24272C;
+  --md-surface-container-high: #2C2F35;
+  --md-surface-container-highest: #34383F;
+  --md-outline: #3A3E46;
+  --md-outline-variant: #2C2F35;
+  --md-error: #FF8A80;
+  --md-on-error: #2A0B0B;
+  --md-error-container: #4A2320;
+  --md-on-error-container: #FFDAD6;
+  --md-warning: #FFCC80;
+  --md-warning-container: #4A3A22;
+  --md-success: #81C784;
+  --md-success-container: #1F3A24;
+  --md-scrim: #000000;
+  --md-inverse-surface: #E6E7EA;
+  --md-inverse-on-surface: #16171A;
+  --md-inverse-primary: #185FA5;
+
+  /* 迁移期兼容别名：旧 CSS / Kotlin 仍可用 */
+  --bg: var(--md-background);
+  --panel: var(--md-surface-container-low);
+  --panel-alt: var(--md-surface-container);
+  --panel2: var(--md-surface-container);
+  --text: var(--md-on-surface);
+  --dim: var(--md-on-surface-variant);
+  --muted: var(--md-on-surface-variant);
+  --accent: var(--md-primary);
+  --line: var(--md-outline-variant);
+  --divider: var(--md-outline-variant);
+  --ok: var(--md-success);
+  --warn: var(--md-warning);
+  --bad: var(--md-error);
+  --danger: var(--md-error);
+
+  /* 状态层（M3 state layers）：叠加在容器底色上 */
+  --state-hover: rgba(230, 231, 234, 0.08);
+  --state-pressed: rgba(230, 231, 234, 0.12);
+  --state-focus: rgba(106, 169, 255, 0.12);
+  --state-selected: rgba(106, 169, 255, 0.14);
+  --state-disabled-content: 0.38;
+  --state-disabled-container: 0.12;
 }
+
+/* 亮色预留：设置 <body data-theme="light"> 即整体切换 */
+[data-theme="light"] {
+  --md-primary: #185FA5;
+  --md-on-primary: #FFFFFF;
+  --md-primary-container: #D6E8FF;
+  --md-on-primary-container: #0B1A2B;
+  --md-secondary: #3C6087;
+  --md-on-secondary: #FFFFFF;
+  --md-secondary-container: #DCE9F7;
+  --md-on-secondary-container: #0B1A2B;
+  --md-tertiary: #1B6B33;
+  --md-on-tertiary: #FFFFFF;
+  --md-background: #F7F8FA;
+  --md-on-background: #1A1C20;
+  --md-surface: #F7F8FA;
+  --md-on-surface: #1A1C20;
+  --md-surface-variant: #EDEFF3;
+  --md-on-surface-variant: #5F636B;
+  --md-surface-container-lowest: #FFFFFF;
+  --md-surface-container-low: #F3F5F8;
+  --md-surface-container: #EDEFF3;
+  --md-surface-container-high: #E5E8EE;
+  --md-surface-container-highest: #DDE1E8;
+  --md-outline: #8A9099;
+  --md-outline-variant: #DDE1E8;
+  --md-error: #B3261E;
+  --md-on-error: #FFFFFF;
+  --md-error-container: #FFDAD6;
+  --md-on-error-container: #410E0B;
+  --md-warning: #8A5A00;
+  --md-warning-container: #FFE0B2;
+  --md-success: #1B6B33;
+  --md-success-container: #C8E6C9;
+  --md-scrim: #000000;
+  --md-inverse-surface: #2C2F35;
+  --md-inverse-on-surface: #F5F6F8;
+  --md-inverse-primary: #6AA9FF;
+
+  /* 迁移期兼容别名：旧 CSS / Kotlin 仍可用 */
+  --bg: var(--md-background);
+  --panel: var(--md-surface-container-low);
+  --panel-alt: var(--md-surface-container);
+  --panel2: var(--md-surface-container);
+  --text: var(--md-on-surface);
+  --dim: var(--md-on-surface-variant);
+  --muted: var(--md-on-surface-variant);
+  --accent: var(--md-primary);
+  --line: var(--md-outline-variant);
+  --divider: var(--md-outline-variant);
+  --ok: var(--md-success);
+  --warn: var(--md-warning);
+  --bad: var(--md-error);
+  --danger: var(--md-error);
+
+  /* 状态层（M3 state layers）：叠加在容器底色上 */
+  --state-hover: rgba(26, 28, 32, 0.08);
+  --state-pressed: rgba(26, 28, 32, 0.12);
+  --state-focus: rgba(24, 95, 165, 0.12);
+  --state-selected: rgba(24, 95, 165, 0.14);
+  --state-disabled-content: 0.38;
+  --state-disabled-container: 0.12;
+}
+
+:root {
+  --shape-xs: 4px;
+  --shape-s: 8px;
+  --shape-m: 12px;
+  --shape-l: 16px;
+  --shape-xl: 28px;
+  --shape-full: 999px;
+  --space-xs: 4px;
+  --space-s: 8px;
+  --space-m: 12px;
+  --space-l: 16px;
+  --space-xl: 24px;
+  --space-xxl: 32px;
+  --type-display-small-size: 24px;
+  --type-display-small-line: 32px;
+  --type-headline-small-size: 20px;
+  --type-headline-small-line: 28px;
+  --type-title-large-size: 18px;
+  --type-title-large-line: 24px;
+  --type-title-medium-size: 15px;
+  --type-title-medium-line: 20px;
+  --type-body-large-size: 14px;
+  --type-body-large-line: 20px;
+  --type-body-medium-size: 12px;
+  --type-body-medium-line: 16px;
+  --type-label-large-size: 13px;
+  --type-label-large-line: 16px;
+  --type-label-small-size: 11px;
+  --type-label-small-line: 14px;
+  --motion-short1: 100ms;
+  --motion-short2: 150ms;
+  --motion-medium: 220ms;
+  --motion-long: 320ms;
+  --motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-easing-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --row-pad: 7px; --pane-pad: 12px; --font-base: 14px;
+}
+body[data-density="compact"] {
+  --row-pad: 4px; --pane-pad: 8px; --font-base: 13px;
+}
+/* === end generated tokens === */
+
+/* === 组件规范：与 /desktop 共用同一份 M3 tokens === */
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
-a { color: var(--accent); text-decoration: none; }
-header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 10; }
-header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .4px; }
-header nav { display: flex; gap: 12px; font-size: 13px; }
-header nav a { color: var(--muted); padding: 3px 6px; border-radius: 6px; }
-header nav a.on { color: var(--text); background: var(--panel2); }
-header #state { margin-left: auto; font-size: 12px; }
-main { padding: 16px; max-width: 1180px; margin: 0 auto; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; overflow-x: auto; }
-.panel h2 { font-size: 13px; margin: 0 0 10px; font-weight: 600; color: var(--muted); letter-spacing: .6px; }
-.row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
-.muted { color: var(--muted); font-size: 12px; }
-button { background: #2d3748; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
-button:hover { border-color: var(--accent); }
-button.primary { background: #2b4b78; border-color: #3d6ba8; }
-input[type=text], select, input[type=file] { background: #14161a; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 13px; }
+body {
+  margin: 0; background: var(--md-surface); color: var(--md-on-surface);
+  font: var(--font-base)/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--state-selected); }
+:focus-visible { outline: 2px solid var(--md-primary); outline-offset: 2px; }
+a { color: var(--md-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, input, select, a, tr td, .card {
+  transition: background-color var(--motion-short2) var(--motion-easing-standard),
+              border-color var(--motion-short2) var(--motion-easing-standard),
+              color var(--motion-short2) var(--motion-easing-standard);
+}
+button:disabled, input:disabled { opacity: var(--state-disabled-content); cursor: not-allowed; }
+
+header {
+  display: flex; align-items: center; gap: var(--space-m); flex-wrap: wrap;
+  padding: var(--space-s) var(--space-l);
+  border-bottom: 1px solid var(--md-outline-variant);
+  background: var(--md-surface-container-low);
+  position: sticky; top: 0; z-index: 10;
+}
+header h1 { font-size: var(--type-title-large-size); margin: 0; font-weight: 500; }
+header nav { display: flex; gap: var(--space-s); font-size: var(--type-label-large-size); }
+header nav a {
+  color: var(--md-on-surface-variant); padding: 3px var(--space-s);
+  border-radius: var(--shape-s);
+}
+header nav a:hover { background: var(--state-hover); color: var(--md-on-surface); }
+header nav a.on { color: var(--md-primary); background: var(--state-selected); }
+header #state { margin-left: auto; font-size: var(--type-body-medium-size); color: var(--md-on-surface-variant); }
+main { padding: var(--space-l); max-width: 1180px; margin: 0 auto; }
+.panel {
+  background: var(--md-surface-container-low);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--shape-m); padding: var(--space-l);
+  margin-bottom: var(--space-m); overflow-x: auto;
+}
+.panel h2 {
+  font-size: var(--type-label-large-size); margin: 0 0 var(--space-m);
+  font-weight: 500; color: var(--md-on-surface-variant);
+}
+.row { display: flex; gap: var(--space-s); align-items: center; flex-wrap: wrap; }
+.muted { color: var(--md-on-surface-variant); font-size: var(--type-body-medium-size); }
+
+button {
+  background: var(--md-surface-container); color: var(--md-on-surface);
+  border: 1px solid var(--md-outline); border-radius: var(--shape-s);
+  padding: 6px var(--space-m); font: inherit; font-size: var(--type-label-large-size);
+  font-weight: 500; cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--md-surface-container-high); border-color: var(--md-primary); }
+button:active:not(:disabled) { background: var(--state-pressed); }
+button.primary {
+  background: var(--md-primary); color: var(--md-on-primary); border-color: transparent;
+}
+button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+input[type=text], select, input[type=file] {
+  background: var(--md-surface-container-lowest); color: var(--md-on-surface);
+  border: 1px solid var(--md-outline); border-radius: var(--shape-s);
+  padding: 6px var(--space-s); font: inherit; font-size: var(--type-label-large-size);
+}
+input[type=text]:focus, select:focus {
+  border-color: var(--md-primary); box-shadow: 0 0 0 1px var(--state-focus); outline: none;
+}
 input[type=file] { max-width: 240px; }
-pre { background: #14161a; border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; max-height: 300px; font-size: 12px; white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
-tr:hover td { background: #212329; }
-td.name { color: var(--accent); white-space: nowrap; font-weight: 500; }
-.group-row td { background: #20262e; color: var(--muted); font-size: 12px; letter-spacing: .5px; }
-.tag { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); margin: 1px 3px 1px 0; }
-.tag.ok { color: var(--ok); border-color: #2d5c4a; }
-.tag.warn { color: var(--warn); border-color: #5c4a2d; }
-.card { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; white-space: pre-wrap; }
-.banner { border-radius: 8px; padding: 9px 12px; margin-bottom: 12px; font-size: 13px; }
-.banner.bad { background: #3a2222; border: 1px solid #6b3535; color: #ffb4b4; }
-.banner.warn { background: #3a3222; border: 1px solid #6b5c35; color: #ffd98a; }
-code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+pre {
+  background: var(--md-surface-container-lowest);
+  border: 1px solid var(--md-outline-variant); border-radius: var(--shape-s);
+  padding: var(--space-m); overflow: auto; max-height: 300px;
+  font-size: var(--type-body-medium-size); white-space: pre-wrap;
+  word-break: break-word; margin: var(--space-s) 0 0;
+}
+table { width: 100%; border-collapse: collapse; font-size: var(--font-base); }
+th, td {
+  text-align: left; padding: var(--row-pad) var(--space-s);
+  border-bottom: 1px solid var(--md-outline-variant); vertical-align: top;
+}
+th {
+  color: var(--md-on-surface-variant); font-weight: 500;
+  position: sticky; top: 0; background: var(--md-surface-container-low);
+}
+tr:hover td { background: var(--state-hover); }
+td.name { color: var(--md-primary); white-space: nowrap; font-weight: 500; }
+.group-row td {
+  background: var(--md-surface-container);
+  color: var(--md-on-surface-variant); font-size: var(--type-body-medium-size);
+}
+.tag {
+  display: inline-block; padding: 1px 7px; border-radius: var(--shape-full);
+  font-size: var(--type-label-small-size); border: 1px solid var(--md-outline-variant);
+  color: var(--md-on-surface-variant); margin: 1px 3px 1px 0;
+}
+.tag.ok { color: var(--md-success); border-color: var(--md-success); background: var(--md-success-container); }
+.tag.warn { color: var(--md-warning); border-color: var(--md-warning); background: var(--md-warning-container); }
+.card {
+  background: var(--md-surface-container);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--shape-s); padding: var(--space-m);
+  margin-bottom: var(--space-m); white-space: pre-wrap;
+}
+.card:hover { background: var(--md-surface-container-high); }
+.banner {
+  border-radius: var(--shape-s); padding: var(--space-s) var(--space-m);
+  margin-bottom: var(--space-m); font-size: var(--type-label-large-size);
+}
+.banner.bad { background: var(--md-error-container); border: 1px solid var(--md-error); color: var(--md-on-error-container); }
+.banner.warn { background: var(--md-warning-container); border: 1px solid var(--md-warning); color: var(--md-warning); }
+code {
+  background: var(--md-surface-container); padding: 1px 5px;
+  border-radius: var(--shape-xs); font-size: var(--type-body-medium-size);
+}
 @media (max-width: 640px) {
-  header { padding: 8px 12px; gap: 8px; }
+  header { padding: var(--space-s) var(--space-m); gap: var(--space-s); }
   header #state { width: 100%; margin-left: 0; }
-  main { padding: 10px; }
-  .panel { padding: 12px; }
-  table { font-size: 12px; }
-  th, td { padding: 5px 6px; }
+  main { padding: var(--space-m); }
+  .panel { padding: var(--space-m); }
+  table { font-size: var(--type-body-medium-size); }
+  th, td { padding: var(--row-pad) var(--space-xs); }
 }
