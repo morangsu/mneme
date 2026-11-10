@@ -635,23 +635,35 @@ async function openCreate() {
 })();
 
 // ---- 明暗主题：与手机端共用同一套 M3 语义色，偏好记在本机 -------------
+// 三态循环：亮 → 暗 → 跟随系统（system 态实时跟随 prefers-color-scheme，
+// 与手机端 MnemeAppearance.mode 同口径）。?theme= 深链仍可强制指定。
 (function initTheme() {
   const btn = $('theme');
   if (!btn) return;
-  const apply = (v) => {
+  const NEXT = { light: 'dark', dark: 'system', system: 'light' };
+  const LABEL = { light: '亮色', dark: '暗色', system: '跟随' };
+  const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  let mode = 'dark'; // 当前偏好态（不是渲染后的明暗）
+  const apply = () => {
+    const v = mode === 'system' ? (mq && mq.matches ? 'dark' : 'light') : mode;
     document.body.dataset.theme = v;
-    btn.textContent = v === 'light' ? '暗色' : '亮色';
-    btn.title = v === 'light' ? '切换到暗色主题' : '切换到亮色主题';
-    try { localStorage.setItem('mneme.theme', v); } catch (_) {}
+    btn.textContent = LABEL[mode];
+    btn.title = `当前：${LABEL[mode]}（点按切到${LABEL[NEXT[mode]]}）`;
   };
   const forced = new URLSearchParams(location.search).get('theme');
-  let saved = forced || 'dark';
-  if (!forced) {
-    try { saved = localStorage.getItem('mneme.theme') || 'dark'; } catch (_) {}
+  if (forced && ['light', 'dark', 'system'].includes(forced)) {
+    mode = forced; // 深链只影响本次渲染，不改本机偏好
+  } else {
+    try { mode = localStorage.getItem('mneme.theme') || 'dark'; } catch (_) {}
+    // 老存档只有 light/dark，system 是新增第三态
+    if (!['light', 'dark', 'system'].includes(mode)) mode = 'dark';
   }
-  apply(saved === 'light' ? 'light' : 'dark');
+  apply();
+  if (mq) mq.addEventListener('change', () => { if (mode === 'system') apply(); });
   btn.addEventListener('click', () => {
-    apply(document.body.dataset.theme === 'light' ? 'dark' : 'light');
+    mode = NEXT[mode] || 'light';
+    try { localStorage.setItem('mneme.theme', mode); } catch (_) {}
+    apply();
   });
 })();
 
