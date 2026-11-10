@@ -120,7 +120,7 @@ async function doSearch() {
     ? S.hits.map((h, idx) => `
       <div class="hit${idx === S.sel ? ' on' : ''}" data-idx="${idx}">
         <b>${esc(h.name)}</b> ${h.group ? `<span class="muted">${esc(h.group)}</span>` : ''}
-        <div class="snip">${h.via === 'pinyin' ? '<span class="tag">拼音</span>' : ''}${h.label ? esc(h.label) + '：' : ''}${esc(h.snippet || '')}</div>
+        <div class="snip">${h.via === 'pinyin' ? '<span class="tag">拼音</span>' : h.via === 'synonym' ? '<span class="tag">别名</span>' : ''}${h.label ? esc(h.label) + '：' : ''}${esc(h.snippet || '')}</div>
       </div>`).join('')
     : `<div class="empty">没有匹配。试试更短的词，或拼音首字母（mh → 麻黄）。</div>`;
   bindRowClick();
@@ -173,6 +173,10 @@ async function showDetail() {
       <button id="undo" class="ghost">撤销上次编辑</button>
       <span class="spacer"></span>
       <button id="del" class="danger">删除</button>
+    </div>
+    <div class="tool-row" style="margin-top:8px">
+      <button class="ghost" data-detail="history">变更历史</button>
+      <button class="ghost" data-detail="group">改分组</button>
     </div>
     <div class="muted" id="life-note"></div>`;
   $('save').addEventListener('click', saveEdit);
@@ -252,6 +256,10 @@ function move(delta) {
 
 document.addEventListener('keydown', (e) => {
   const typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+  if (T.active) {
+    if (e.key === 'Escape') { e.preventDefault(); closeTool(); return; }
+    return;
+  }
   if (Q.active) {
     if (e.key === 'Escape') { e.preventDefault(); exitQuiz(); return; }
     if (typing) return;
@@ -317,13 +325,18 @@ async function refreshSync() {
   el.textContent = st.configured
     ? `已配置：${(st.targets || []).join('、')}`
     : '未配置（填 owner/repo/token 后保存）';
+  const sel = $('sync-target');
+  const targets = (st.targets && st.targets.length) ? st.targets : ['github-private'];
+  const cur = targets.includes(sel.value) ? sel.value : targets[0];
+  sel.innerHTML = targets.map((t) => `<option value="${esc(t)}"${t === cur ? ' selected' : ''}>${esc(t)}</option>`).join('');
   $('sync-dry').disabled = $('sync-run').disabled = !st.configured;
 }
 
 async function runSync(dry) {
   const out = $('sync-out');
   out.textContent = dry ? '预演中…' : '同步中…';
-  const r = await api('/api/sync/github-private' + (dry ? '?dry=true' : ''), { method: 'POST' });
+  const target = $('sync-target').value || 'github-private';
+  const r = await api('/api/sync/' + encodeURIComponent(target) + (dry ? '?dry=true' : ''), { method: 'POST' });
   out.textContent = r.error ? `错误：${r.error}` : (r.report || JSON.stringify(r));
 }
 
@@ -505,6 +518,9 @@ function renderQuiz() {
   $('quiz-answer').innerHTML = '';
   $('quiz-reveal').hidden = !c || Q.revealed;
   $('quiz-reveal').disabled = !c;
+  $('quiz-judge').hidden = true;
+  $('quiz-input').value = '';
+  $('quiz-judge-out').textContent = '';
   $('quiz-grades').hidden = !c || !Q.revealed;
 }
 
@@ -533,7 +549,8 @@ async function revealQuiz() {
   Q.revealed = true;
   $('quiz-reveal').hidden = true;
   $('quiz-grades').hidden = false;
-  $('quiz-note').textContent = '按 1-4 评分';
+  $('quiz-judge').hidden = false;
+  $('quiz-note').textContent = '可先自己写答案判分，或直接按 1-4 评分';
 }
 
 async function gradeQuiz(g) {
@@ -572,4 +589,329 @@ document.querySelectorAll('#quiz-grades button[data-grade]').forEach((b) => {
   if (qp.get('quiz') === '1') {
     startQuiz().then(() => { if (qp.get('reveal') === '1') revealQuiz(); });
   }
+}
+
+// ---- 工具覆盖层：把手机端能力接进桌面（全部走 /api/*） -----------------
+// 与复习面板并列：同一时间只显示一个覆盖层，Esc 关闭。
+const T = { active: false, name: '', data: null, arg: '', decisions: {} };
+const TOOL_TITLES = {
+  reverse: '反查线索', data: '导入与导出', deleted: '回收站',
+  groups: '分组管理', paste: '批量粘贴', upstream: '公共基础库', history: '变更历史',
+};
+
+function toolBody(html) {
+  $('tool-body').innerHTML = html + '<pre id="tool-out" class="tool-note"></pre>';
+}
+function toolNote(msg, isErr) {
+  const el = $('tool-out');
+  if (!el) return;
+  el.textContent = msg ?? '';
+  el.className = isErr ? 'tool-note tool-error' : 'tool-note';
+}
+function showToolPane(on) {
+  T.active = on;
+  $('tool-pane').hidden = !on;
+  document.querySelector('main').style.display = on ? 'none' : '';
+}
+async function openTool(name, arg = '') {
+  // 复习与工具互斥，避免两个覆盖层叠在一起
+  if (Q.active) exitQuiz();
+  T.name = name; T.arg = arg; T.data = null; T.decisions = {};
+  $('tool-title').textContent = TOOL_TITLES[name] || '工具';
+  showToolPane(true);
+  toolBody('<div class="muted">读取中…</div>');
+  try {
+    if (name === 'reverse') await renderReverse();
+    else if (name === 'data') await renderData();
+    else if (name === 'deleted') await renderDeleted();
+    else if (name === 'groups') await renderGroups(arg);
+    else if (name === 'paste') await renderPaste();
+    else if (name === 'upstream') await renderUpstream();
+    else if (name === 'history') await renderHistory(arg);
+  } catch (e) { toolNote('加载失败：' + e, true); }
+}
+function closeTool() { showToolPane(false); }
+
+function renderReverse() {
+  toolBody(`<div class="tool-card">
+    <h3>按线索反推实体</h3>
+    <div class="tool-row"><input type="text" id="t-rev" placeholder="功效:宣肺平喘|禁忌:表虚自汗" style="flex:1 1 320px" /><button data-act="reverse-run">反查</button></div>
+    <div id="t-list" class="tool-list"></div>
+  </div>`);
+  toolNote('多个线索用 | 分隔，全部命中才返回');
+}
+async function reverseRun() {
+  const q = $('t-rev').value.trim();
+  if (!q) return toolNote('先填线索', true);
+  const r = await api('/api/reverse?clue=' + encodeURIComponent(q));
+  if (r.error) return toolNote('错误：' + r.error, true);
+  const items = r.items || [];
+  $('t-list').innerHTML = items.length ? items.map((x) => `<div class="tool-item">
+    <span class="tag">${esc(String(x.score ?? ''))}</span>
+    <span class="grow"><b>${esc(x.name || x.id || '')}</b><div class="snip">${esc(x.summary || '')}</div></span>
+  </div>`).join('') : '<div class="muted">没有匹配</div>';
+  toolNote(`${items.length} 条结果`);
+}
+
+function renderData() {
+  const fmts = ['bundle', 'json', 'csv', 'tsv', 'md', 'anki', 'html'];
+  toolBody(`<div class="tool-card"><h3>导出</h3>
+    <div class="tool-row"><select id="t-fmt">${fmts.map((f) => `<option value="${f}">${f}</option>`).join('')}</select>
+    <button data-act="export">下载</button></div></div>
+    <div class="tool-card"><h3>导入</h3>
+    <div class="tool-row"><input type="file" id="t-file" /><button data-act="import-preview" class="ghost">预览差异</button><button data-act="import-run">确认导入</button></div>
+    <div class="muted">导入走 Rust 侧三方合并；原样字段冲突会提示，不会静默覆盖。</div></div>`);
+  toolNote('先选文件，预览后再导入');
+}
+async function toolFile() {
+  const f = $('t-file')?.files?.[0];
+  if (!f) return null;
+  return { content: await f.text(), filename: f.name };
+}
+async function toolImport(dry) {
+  const f = await toolFile();
+  if (!f) return toolNote('先选文件', true);
+  toolNote(dry ? '预览中…' : '导入中…');
+  const r = await api(dry ? '/api/import/preview' : '/api/import', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...f, dry }),
+  });
+  toolNote(r.error ? '错误：' + r.error : JSON.stringify(r, null, 2), !!r.error);
+}
+async function toolExport() {
+  const fmt = $('t-fmt').value;
+  const r = await fetch('/api/export?format=' + encodeURIComponent(fmt) + '&token=' + encodeURIComponent(TOKEN));
+  if (!r.ok) return toolNote('导出失败：HTTP ' + r.status, true);
+  const blob = await r.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'mneme-export.' + fmt;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toolNote('已下载 ' + fmt);
+}
+
+async function renderDeleted() {
+  toolBody('<div class="tool-card"><h3>回收站（墓碑，可恢复）</h3><div id="t-list" class="tool-list"></div></div>');
+  await refreshDeleted();
+}
+async function refreshDeleted() {
+  const r = await api('/api/deleted');
+  if (r.error) return toolNote('错误：' + r.error, true);
+  const items = r.items || [];
+  $('t-list').innerHTML = items.length ? items.map((x) => `<div class="tool-item">
+    <span class="grow"><b>${esc(x.name)}</b><div class="snip">${esc(x.id)} · rev ${x.rev}</div></span>
+    <button class="ghost" data-act="restore" data-id="${esc(x.id)}">恢复</button>
+  </div>`).join('') : '<div class="muted">回收站是空的</div>';
+  toolNote(`${items.length} 条`);
+}
+
+async function renderGroups(arg) {
+  const r = await api('/api/groups');
+  if (r.error) { toolBody(`<div class="tool-card tool-error">${esc(r.error)}</div>`); return; }
+  T.data = r;
+  const groups = r.items || [];
+  const opts = groups.map((g) => `<option value="${esc(g.id)}">${esc(g.path || g.name)}</option>`).join('');
+  const rows = groups.length ? groups.map((g) => `<div class="tool-item">
+    <span class="grow" style="padding-left:${(g.depth || 0) * 16}px"><b>${esc(g.name)}</b>
+    <div class="snip">${esc(g.path || g.id)} · ${g.entities} 条</div></span>
+    <button class="ghost" data-act="group-edit" data-id="${esc(g.id)}" data-name="${esc(g.name)}" data-parent="${esc(g.parent || '')}">编辑</button>
+    <button class="danger" data-act="group-del" data-id="${esc(g.id)}">删除</button>
+  </div>`).join('') : '<div class="muted">还没有分组</div>';
+  toolBody(`<div class="tool-card"><h3>分组树（${r.total} 组 · 未分组 ${r.unassigned}）</h3>
+    <div id="t-list" class="tool-list">${rows}</div>
+    <h3>新建 / 重命名</h3>
+    <div class="tool-row"><input type="text" id="t-g-id" placeholder="分组 id（留空=用名称）" />
+    <input type="text" id="t-g-name" placeholder="名称" />
+    <select id="t-g-parent"><option value="">（无上级）</option>${opts}</select>
+    <button data-act="group-upsert">保存分组</button></div>
+    ${arg ? `<h3>把「${esc(arg)}」挂到分组</h3>
+    <div class="tool-row"><select id="t-g-assign"><option value="">（移出分组）</option>${opts}</select>
+    <button data-act="group-assign" data-id="${esc(arg)}">应用</button></div>` : ''}
+  </div>`);
+  toolNote(groups.length ? '删除分组会把子组上移、成员变未分组' : '');
+}
+
+async function renderPaste() {
+  const t = await api('/api/template');
+  T.data = { blocks: [], kind: t.kind || 'herb' };
+  toolBody(`<div class="tool-card"><h3>批量粘贴（空行分隔多条）</h3>
+    <textarea id="t-paste" placeholder="药名：麻黄&#10;功效：发汗解表&#10;&#10;药名：桂枝&#10;功效：温通经脉"></textarea>
+    <div class="tool-row"><button data-act="paste-parse">解析</button><button data-act="paste-dup" class="ghost">查重</button><button data-act="paste-create">批量新建</button></div>
+    <div id="t-list" class="tool-list"></div></div>`);
+  toolNote('解析后确认字段，再批量新建');
+}
+async function pasteParse() {
+  const r = await api('/api/parse-paste', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: $('t-paste').value, kind: T.data.kind }),
+  });
+  if (r.error) return toolNote('错误：' + r.error, true);
+  T.data.blocks = r.blocks || [];
+  $('t-list').innerHTML = T.data.blocks.length ? T.data.blocks.map((b) => `<div class="tool-item">
+    <span class="grow"><b>第 ${b.index + 1} 条 · 命中 ${b.matched} 个字段</b>
+    <div class="snip">${esc(JSON.stringify(b.fields))}${b.unknown?.length ? ' · 未识别：' + esc(b.unknown.join(',')) : ''}</div></span>
+  </div>`).join('') : '<div class="muted">没有解析出条目（用空行分隔多条）</div>';
+  toolNote(`共 ${T.data.blocks.length} 条，跳过 ${r.skipped_blocks ?? 0} 块`);
+}
+function pasteFields(b) {
+  const out = {};
+  for (const [k, v] of Object.entries(b?.fields || {})) out[k] = typeof v === 'string' ? v : JSON.stringify(v);
+  return out;
+}
+async function pasteDup() {
+  const b = T.data.blocks?.[0];
+  if (!b) return toolNote('先解析', true);
+  const r = await api('/api/check-duplicate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: T.data.kind, fields: pasteFields(b), exclude_id: '' }),
+  });
+  toolNote(r.error ? '错误：' + r.error : `疑似重复 ${(r.items || []).length} 条：\n` +
+    (r.items || []).map((x) => `${x.name}（${x.reason}）`).join('\n'));
+}
+async function pasteCreate() {
+  if (!T.data.blocks?.length) return toolNote('先解析', true);
+  const r = await api('/api/create-batch', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: T.data.kind, items: T.data.blocks.map((b) => ({ fields: b.fields })) }),
+  });
+  toolNote(r.error ? '错误：' + r.error :
+    `新建 ${(r.created || []).length} 条 / 跳过 ${(r.skipped || []).length} 条 / 失败 ${(r.failed || []).length} 条`);
+}
+
+async function renderHistory(id) {
+  toolBody(`<div class="tool-card"><h3>${esc(id || '')} 的变更历史</h3><div id="t-list" class="tool-list"></div></div>`);
+  if (!id) return toolNote('没有指定实体', true);
+  const r = await api('/api/history/' + encodeURIComponent(id));
+  if (r.error) return toolNote('错误：' + r.error, true);
+  const items = r.items || [];
+  $('t-list').innerHTML = items.length ? items.map((x) => `<div class="tool-item"><span class="grow snip">${esc(typeof x === 'string' ? x : JSON.stringify(x))}</span></div>`).join('') : '<div class="muted">暂无历史</div>';
+  toolNote(`${items.length} 条`);
+}
+
+async function renderUpstream() {
+  toolBody(`<div class="tool-card"><h3>公共基础库（只读上游）</h3>
+    <div id="t-status" class="muted">读取中…</div>
+    <div class="tool-row"><button data-act="up-pull">拉取公共库</button>
+    <button data-act="up-suggest" class="ghost">全部按建议</button>
+    <button data-act="up-resolve">提交裁决</button></div>
+    <div id="t-list" class="tool-list"></div></div>`);
+  const st = await api('/api/upstream/status');
+  $('t-status').textContent = st.error ? st.error :
+    `上游 rev ${st.upstream_rev} · 跟踪 ${st.tracked_entities} 条 · 待裁决计划 ${st.pending_plans} · 源 ${st.public_source || '未配置'}`;
+  toolNote('拉取会生成暂存计划；有冲突需逐项决定后才会写库');
+}
+async function upPull() {
+  toolNote('拉取中…');
+  const r = await api('/api/upstream/pull', { method: 'POST' });
+  if (r.error) return toolNote('错误：' + r.error, true);
+  if (r.unchanged) return toolNote('上游未变化（rev ' + r.upstream_rev + '）');
+  T.data = r;
+  T.decisions = {};
+  renderConflicts(r);
+}
+function renderConflicts(plan) {
+  const cs = plan.conflicts || [];
+  $('t-list').innerHTML = cs.length ? cs.map((c) => `<div class="tool-item" style="align-items:flex-start;flex-direction:column">
+    <b>${esc(c.entity_name)} · ${esc(c.label || c.field)}</b>
+    <div class="conflict-grid"><div>基线：${esc(c.base || '（空）')}</div><div>上游：${esc(c.upstream || '（空）')}</div><div>我的：${esc(c.local || '（空）')}</div></div>
+    <div class="conflict-choices">
+      <button class="ghost" data-act="decide" data-cid="${esc(c.id)}" data-v="KeepMine">保留我的</button>
+      <button class="ghost" data-act="decide" data-cid="${esc(c.id)}" data-v="TakeUpstream">用上游</button>
+      <button class="ghost" data-act="decide" data-cid="${esc(c.id)}" data-v="KeepBoth">两者都留</button>
+      <input type="text" data-custom="${esc(c.id)}" placeholder="自定义值（可选）" />
+    </div>
+    <div class="snip" data-state="${esc(c.id)}">未决定 · 建议 ${esc(String(c.suggestion ?? ''))}</div>
+  </div>`).join('') : '<div class="muted">没有需要裁决的冲突，可直接提交</div>';
+  toolNote(plan.summary || `计划 ${plan.id}：冲突 ${cs.length} 项`);
+}
+function markDecision(cid, v) {
+  const custom = $('tool-body').querySelector(`[data-custom="${CSS.escape(cid)}"]`)?.value.trim() || '';
+  T.decisions[cid] = { decision: v, custom_value: custom || null };
+  const st = $('tool-body').querySelector(`[data-state="${CSS.escape(cid)}"]`);
+  if (st) st.textContent = `已决定：${v}${custom ? ' · 自定义 ' + custom : ''}`;
+  toolNote(`已决定 ${Object.keys(T.decisions).length} 项`);
+}
+async function upResolve() {
+  if (!T.data?.id) return toolNote('先拉取公共库', true);
+  const decisions = Object.entries(T.decisions).map(([conflict_id, v]) => ({ conflict_id, ...v }));
+  const r = await api('/api/upstream/resolve', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan_id: T.data.id, decisions }),
+  });
+  toolNote(r.error ? '错误：' + r.error : JSON.stringify(r, null, 2), !!r.error);
+}
+
+$('tool-exit').addEventListener('click', closeTool);
+document.addEventListener('click', (e) => {
+  const t = e.target.closest?.('[data-tool]');
+  if (t) { openTool(t.dataset.tool); return; }
+  const d = e.target.closest?.('[data-detail]');
+  if (d) {
+    const id = S.items[S.sel]?.id;
+    if (!id) return;
+    openTool(d.dataset.detail === 'history' ? 'history' : 'groups', id);
+  }
+});
+$('tool-body').addEventListener('click', async (e) => {
+  const btn = e.target.closest?.('[data-act]');
+  if (!btn) return;
+  const act = btn.dataset.act;
+  try {
+    if (act === 'reverse-run') await reverseRun();
+    else if (act === 'export') await toolExport();
+    else if (act === 'import-preview') await toolImport(true);
+    else if (act === 'import-run') await toolImport(false);
+    else if (act === 'restore') {
+      const r = await api('/api/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: btn.dataset.id }) });
+      toolNote(r.error ? '错误：' + r.error : '已恢复 ' + btn.dataset.id, !!r.error);
+      await refreshDeleted();
+    } else if (act === 'group-edit') {
+      $('t-g-id').value = btn.dataset.id; $('t-g-name').value = btn.dataset.name;
+      $('t-g-parent').value = btn.dataset.parent || '';
+      toolNote('已填入编辑框，改完点「保存分组」');
+    } else if (act === 'group-upsert') {
+      const r = await api('/api/groups/upsert', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        id: $('t-g-id').value.trim(), name: $('t-g-name').value.trim(), parent: $('t-g-parent').value,
+      }) });
+      toolNote(r.error ? '错误：' + r.error : '已保存分组 ' + r.id, !!r.error);
+      if (!r.error) await renderGroups(T.arg);
+    } else if (act === 'group-del') {
+      if (!confirm('删除该分组？子组会上移，成员变未分组')) return;
+      const r = await api('/api/groups/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: btn.dataset.id }) });
+      toolNote(r.error ? '错误：' + r.error : '已删除 ' + btn.dataset.id, !!r.error);
+      if (!r.error) await renderGroups(T.arg);
+    } else if (act === 'group-assign') {
+      const r = await api('/api/group', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: btn.dataset.id, group_id: $('t-g-assign').value }) });
+      toolNote(r.error ? '错误：' + r.error : '已更新分组', !!r.error);
+    } else if (act === 'paste-parse') await pasteParse();
+    else if (act === 'paste-dup') await pasteDup();
+    else if (act === 'paste-create') await pasteCreate();
+    else if (act === 'up-pull') await upPull();
+    else if (act === 'up-suggest') {
+      (T.data?.conflicts || []).forEach((c) => markDecision(c.id, String(c.suggestion || 'KeepMine')));
+    } else if (act === 'up-resolve') await upResolve();
+    else if (act === 'decide') markDecision(btn.dataset.cid, btn.dataset.v);
+  } catch (err) { toolNote('操作失败：' + err, true); }
+});
+
+// 复习：自由输入判分（与网页端 /api/judge 同源）
+async function judgeQuiz() {
+  const c = Q.cards[Q.idx];
+  const input = $('quiz-input').value.trim();
+  if (!c || !input) return;
+  const r = await api('/api/judge', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ card_id: c.id, input }),
+  });
+  $('quiz-judge-out').textContent = r.error ? '错误：' + r.error :
+    (r.summary || `相似度 ${r.score ?? '?'} · ${r.correct ? '命中' : '未命中'}`);
+}
+$('quiz-judge-btn').addEventListener('click', judgeQuiz);
+$('quiz-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); judgeQuiz(); } });
+
+// 深链：?tool=reverse|data|deleted|groups|paste|upstream 便于验证与分享
+{
+  const tp = new URLSearchParams(location.search).get('tool');
+  if (tp && TOOL_TITLES[tp]) openTool(tp);
 }

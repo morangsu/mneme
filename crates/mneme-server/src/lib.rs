@@ -13,6 +13,11 @@ use axum::{
 };
 use mneme_codec::{self as codec, Format, ImportOptions, ImportStrategy};
 use mneme_core::{ReviewEvent, Sm2Scheduler, TermTable, due_cards, fold_events, judge, now_ms};
+use mneme_core::{
+    Entity as CoreEntity, Group as CoreGroup, Value as CoreValue, MAX_DEPTH,
+    find_duplicates, group_tree, parse_paste_batch as core_parse_paste_batch,
+    path_names, would_cycle,
+};
 use mneme_store::{Op, Store};
 use mneme_sync::{SyncConfig, SyncEngine, incremental};
 use mneme_upstream::{
@@ -128,6 +133,15 @@ pub fn router(state: AppState) -> Router {
         .route("/sync/status", get(api_sync_status))
         .route("/sync/{id}", post(api_sync))
         .route("/sync/config", post(api_sync_config))
+        .route("/deleted", get(api_deleted))
+        .route("/history/{id}", get(api_history))
+        .route("/groups", get(api_groups))
+        .route("/groups/upsert", post(api_group_upsert))
+        .route("/groups/delete", post(api_group_delete))
+        .route("/check-duplicate", post(api_check_duplicate))
+        .route("/parse-paste", post(api_parse_paste))
+        .route("/create-batch", post(api_create_batch))
+        .route("/import/preview", post(api_import_preview))
         .route("/upstream/status", get(api_upstream_status))
         .route("/upstream/adopt", post(api_upstream_adopt))
         .route("/upstream/pull", post(api_upstream_pull))
@@ -1232,4 +1246,257 @@ pub fn load_sync_config(store: &Arc<Store>, path: &std::path::Path) -> Option<Ar
     SyncConfig::from_file(path)
         .ok()
         .map(|c| Arc::new(SyncEngine::new(store.clone(), c)))
+}
+
+
+// ---------------------------------------------------------------------------
+// 手机端能力补齐：与 mneme-ffi 的对应函数同源（store / core 层），
+// 这里只做 HTTP 形态适配，不重写任何业务规则。
+// ---------------------------------------------------------------------------
+fn errj(msg: impl Into<String>) -> Json<JsonValue> {
+    Json(json!({ "error": msg.into() }))
+}
+
+fn schema_of(s: &AppState) -> Option<mneme_core::DomainSchema> {
+    s.store.read(|m| m.schema.clone())
+}
+
+/// 回收站：墓碑条目（与 FFI listDeleted 同源）。
+async fn api_deleted(State(s): State<AppState>) -> Json<JsonValue> {
+    let (kind, primary, items) = s.store.read(|m| {
+        let schema = m.schema.as_ref();
+        let kind = schema
+            .and_then(|x| x.entities.first().map(|e| e.kind.clone()))
+            .unwrap_or_else(|| "herb".into());
+        let primary = schema
+            .and_then(|x| x.entity_def(&kind).and_then(|d| d.primary.clone()))
+            .unwrap_or_else(|| "name".into());
+        let items: Vec<JsonValue> = m
+            .entities
+            .values()
+            .filter(|e| e.deleted)
+            .map(|e| json!({
+                "id": e.id, "kind": e.kind, "name": e.display_of(&primary),
+                "deleted_at": e.updated_at, "rev": e.rev, "device": e.device,
+            }))
+            .collect();
+        (kind, primary, items)
+    });
+    let _ = (kind, primary);
+    Json(json!({ "items": items }))
+}
+
+/// 字段级变更历史（与 FFI entityHistory 同源）。
+async fn api_history(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Json<JsonValue> {
+    let limit: usize = q.get("limit").and_then(|x| x.parse().ok()).unwrap_or(50);
+    match s.store.entity_history(&id, limit) {
+        Ok(items) => Json(json!({ "items": items })),
+        Err(e) => errj(e.to_string()),
+    }
+}
+
+/// 分组树 + 未分组计数。
+async fn api_groups(State(s): State<AppState>) -> Json<JsonValue> {
+    let (groups, entities) = s.store.read(|m| (m.groups.values().cloned().collect::<Vec<_>>(), m.entities_vec()));
+    let tree = group_tree(&groups);
+    let items: Vec<JsonValue> = tree.iter().map(|n| {
+        let count = entities.iter().filter(|e| !e.deleted && e.group_id.as_deref() == Some(n.id.as_str())).count();
+        json!({
+            "id": n.id, "name": n.name, "parent": n.parent, "depth": n.depth,
+            "path": n.display_path(), "path_names": n.path_names, "path_ids": n.path_ids,
+            "entities": count,
+        })
+    }).collect();
+    let unassigned = entities.iter().filter(|e| {
+        !e.deleted && e.group_id.as_deref().map(|g| !tree.iter().any(|n| n.id == g)).unwrap_or(true)
+    }).count();
+    Json(json!({ "items": items, "unassigned": unassigned, "total": tree.len() }))
+}
+
+#[derive(Deserialize)]
+struct GroupBody {
+    #[serde(default)]
+    id: String,
+    name: String,
+    #[serde(default)]
+    parent: String,
+}
+
+/// 新建 / 重命名 / 改上级：名称非空、禁止成环、限制深度。
+async fn api_group_upsert(State(s): State<AppState>, Json(b): Json<GroupBody>) -> Json<JsonValue> {
+    let name = b.name.trim().to_string();
+    if name.is_empty() { return errj("分组名不能为空"); }
+    let groups: Vec<CoreGroup> = s.store.read(|m| m.groups.values().cloned().collect());
+    let id = if b.id.trim().is_empty() { name.clone() } else { b.id.trim().to_string() };
+    let parent = if b.parent.trim().is_empty() { None } else { Some(b.parent.trim().to_string()) };
+    let existing = groups.iter().find(|g| g.id == id).cloned();
+    if let Some(p) = parent.as_deref() {
+        if !groups.iter().any(|g| g.id == p && !g.deleted) {
+            return errj(format!("上级分组不存在：{p}"));
+        }
+        if would_cycle(&groups, &id, Some(p)) { return errj("不能把分组挂到自己的下级里"); }
+        if path_names(&groups, p).len() >= MAX_DEPTH {
+            return errj(format!("最多 {MAX_DEPTH} 层，不能再往下了"));
+        }
+    }
+    let now = now_ms();
+    let device = s.store.device().to_string();
+    let mut rev = s.store.stats().rev + 1;
+    let renamed = existing.as_ref().map(|g| g.name != name).unwrap_or(false);
+    let mut ops: Vec<Op> = vec![Op::UpsertGroup {
+        group: CoreGroup {
+            id: id.clone(), kind: "group".into(), name: name.clone(), parent: parent.clone(),
+            common: existing.as_ref().map(|g| g.common.clone()).unwrap_or_default(),
+            rev, updated_at: now, device: device.clone(), deleted: false,
+        },
+    }];
+    if renamed {
+        let members: Vec<CoreEntity> = s.store.read(|m| {
+            m.entities_vec().into_iter().filter(|e| e.group_id.as_deref() == Some(id.as_str())).collect()
+        });
+        for mut e in members {
+            e.set("group_name", CoreValue::Text(name.clone()), now);
+            rev += 1;
+            e.rev = rev;
+            e.updated_at = now;
+            e.device = device.clone();
+            ops.push(Op::UpsertEntity { entity: e });
+        }
+    }
+    match s.store.mutate(&ops) {
+        Ok(_) => Json(json!({ "ok": true, "id": id, "name": name, "parent": parent })),
+        Err(e) => errj(e.to_string()),
+    }
+}
+
+/// 删除分组：子组上移、成员变未分组，写墓碑而非物理删。
+async fn api_group_delete(State(s): State<AppState>, Json(b): Json<IdBody>) -> Json<JsonValue> {
+    let (groups, entities) = s.store.read(|m| (m.groups.values().cloned().collect::<Vec<_>>(), m.entities_vec()));
+    let Some(target) = groups.iter().find(|g| g.id == b.id && !g.deleted).cloned() else {
+        return errj(format!("分组不存在：{}", b.id));
+    };
+    let now = now_ms();
+    let device = s.store.device().to_string();
+    let mut rev = s.store.stats().rev;
+    let mut ops: Vec<Op> = Vec::new();
+    let children: Vec<CoreGroup> = groups.iter()
+        .filter(|g| !g.deleted && g.parent.as_deref() == Some(b.id.as_str())).cloned().collect();
+    for mut c in children.clone() {
+        c.parent = target.parent.clone();
+        rev += 1; c.rev = rev; c.updated_at = now; c.device = device.clone();
+        ops.push(Op::UpsertGroup { group: c });
+    }
+    let members: Vec<CoreEntity> = entities.into_iter()
+        .filter(|e| e.group_id.as_deref() == Some(b.id.as_str())).collect();
+    for mut e in members.clone() {
+        e.group_id = None;
+        if e.get("group_name").is_some() { e.set("group_name", CoreValue::Text(String::new()), now); }
+        rev += 1; e.rev = rev; e.updated_at = now; e.device = device.clone();
+        ops.push(Op::UpsertEntity { entity: e });
+    }
+    rev += 1;
+    let mut tomb = target.clone();
+    tomb.deleted = true; tomb.rev = rev; tomb.updated_at = now; tomb.device = device;
+    ops.push(Op::UpsertGroup { group: tomb });
+    match s.store.mutate(&ops) {
+        Ok(_) => Json(json!({ "ok": true, "id": b.id, "reparented": children.len(), "unassigned": members.len() })),
+        Err(e) => errj(e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct DuplicateBody {
+    kind: String,
+    fields: BTreeMap<String, String>,
+    #[serde(default)]
+    exclude_id: String,
+}
+
+async fn api_check_duplicate(State(s): State<AppState>, Json(b): Json<DuplicateBody>) -> Json<JsonValue> {
+    let Some(schema) = schema_of(&s) else { return errj("还没有加载领域 schema") };
+    let entities = s.store.read(|m| m.entities_vec());
+    let exclude = if b.exclude_id.trim().is_empty() { None } else { Some(b.exclude_id.as_str()) };
+    let items = find_duplicates(&schema, &entities, &b.kind, &b.fields, exclude);
+    Json(json!({ "items": items.iter().map(|d| json!({
+        "id": d.id, "name": d.name, "reason": d.reason, "score": d.score,
+    })).collect::<Vec<_>>() }))
+}
+
+#[derive(Deserialize)]
+struct PasteBody {
+    text: String,
+    #[serde(default)]
+    kind: String,
+}
+
+/// 粘贴解析：单条与批量统一返回 blocks（与 FFI parsePasteMany 同源）。
+async fn api_parse_paste(State(s): State<AppState>, Json(b): Json<PasteBody>) -> Json<JsonValue> {
+    let Some(schema) = schema_of(&s) else { return errj("还没有加载领域 schema") };
+    let kind = if b.kind.trim().is_empty() {
+        schema.entities.first().map(|e| e.kind.clone()).unwrap_or_else(|| "herb".into())
+    } else { b.kind.trim().to_string() };
+    if b.text.trim().is_empty() { return Json(json!({ "blocks": [], "count": 0, "primary": "name" })); }
+    let batch = core_parse_paste_batch(&b.text, &schema, &kind);
+    let blocks: Vec<JsonValue> = batch.blocks.iter().enumerate().map(|(i, p)| json!({
+        "index": i, "fields": p.fields,
+        "hits": p.hits.iter().map(|h| json!({
+            "key": h.key, "label": h.label, "value": h.value, "line": h.line,
+        })).collect::<Vec<_>>(),
+        "unknown": p.unknown, "conflicts": p.conflicts, "matched": p.fields.len(),
+    })).collect();
+    let primary = schema.entity_def(&kind).and_then(|d| d.primary.clone()).unwrap_or_else(|| "name".into());
+    Json(json!({
+        "blocks": blocks, "count": batch.blocks.len(),
+        "skipped_blocks": batch.skipped_blocks, "primary": primary,
+    }))
+}
+
+#[derive(Deserialize)]
+struct BatchItem {
+    #[serde(default)]
+    fields: BTreeMap<String, JsonValue>,
+    #[serde(default)]
+    id_hint: String,
+}
+#[derive(Deserialize)]
+struct BatchBody {
+    kind: String,
+    items: Vec<BatchItem>,
+}
+
+/// 批量新建：逐条走 create_one（查重 / superseded / 原子写与手机端一致）。
+async fn api_create_batch(State(s): State<AppState>, Json(b): Json<BatchBody>) -> Json<JsonValue> {
+    let Some(schema) = schema_of(&s) else { return errj("还没有加载领域 schema") };
+    if b.items.is_empty() { return errj("没有要新建的条目"); }
+    let (mut created, mut skipped, mut failed): (Vec<JsonValue>, Vec<JsonValue>, Vec<JsonValue>) = (vec![], vec![], vec![]);
+    for (index, item) in b.items.iter().enumerate() {
+        match mneme_store::entities::create_one(&s.store, &schema, &b.kind, &item.fields, item.id_hint.trim()) {
+            Ok(c) => created.push(json!({ "index": index, "id": c.id, "rev": c.rev, "name": c.name })),
+            Err(mneme_store::entities::CreateErr::Duplicate { message, id, deleted }) =>
+                skipped.push(json!({ "index": index, "name": id, "reason": message, "existing_id": id, "deleted": deleted })),
+            Err(mneme_store::entities::CreateErr::Other(e)) => failed.push(json!({ "index": index, "error": e })),
+        }
+    }
+    Json(json!({ "ok": true, "created": created, "skipped": skipped, "failed": failed }))
+}
+
+#[derive(Deserialize)]
+struct PreviewBody {
+    content: String,
+    filename: String,
+}
+
+/// 导入差异预览：逐条 create / update / same + immutable 警告，不写库。
+async fn api_import_preview(State(s): State<AppState>, Json(b): Json<PreviewBody>) -> Json<JsonValue> {
+    let bytes = b.content.as_bytes();
+    let fmt = codec::detect(Some(FsPath::new(&b.filename)), bytes);
+    if !fmt.importable() { return errj(format!("{fmt} 不支持导入")); }
+    match codec::preview_import(&s.store, bytes, fmt) {
+        Ok(p) => Json(json!(p)),
+        Err(e) => errj(e.to_string()),
+    }
 }

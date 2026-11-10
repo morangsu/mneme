@@ -27,6 +27,7 @@
     <details id="sync-box">
       <summary>同步（GitHub 私有库）</summary>
       <div class="muted" id="sync-status">读取中…</div>
+      <select id="sync-target" aria-label="同步目标"></select>
       <div class="sync-btns">
         <button id="sync-dry" class="ghost">预演</button>
         <button id="sync-run">立即同步</button>
@@ -39,6 +40,18 @@
         <input id="sync-token" placeholder="token（留空 = 沿用已保存的）" type="password" autocomplete="off" />
         <button id="sync-save">保存配置并启用</button>
         <div class="muted">token 只写进本机数据目录的 sync.json，别提交或外传。</div>
+      </div>
+    </details>
+
+    <details id="tools-box">
+      <summary>工具（手机端能力）</summary>
+      <div class="tool-btns">
+        <button data-tool="reverse" class="ghost">反查</button>
+        <button data-tool="data" class="ghost">导入导出</button>
+        <button data-tool="deleted" class="ghost">回收站</button>
+        <button data-tool="groups" class="ghost">分组</button>
+        <button data-tool="paste" class="ghost">批量粘贴</button>
+        <button data-tool="upstream" class="ghost">公共库</button>
       </div>
     </details>
   </aside>
@@ -69,6 +82,11 @@
     </div>
     <div class="quiz-actions">
       <button id="quiz-reveal">显示答案（空格）</button>
+      <div id="quiz-judge" hidden>
+        <input id="quiz-input" placeholder="自己写答案，回车判分（可不填直接评分）" autocomplete="off" />
+        <button id="quiz-judge-btn" class="ghost">判分</button>
+        <span id="quiz-judge-out" class="muted"></span>
+      </div>
       <div id="quiz-grades" hidden>
         <button data-grade="1" class="ghost">1 · 忘了</button>
         <button data-grade="2" class="ghost">2 · 困难</button>
@@ -77,6 +95,18 @@
       </div>
     </div>
     <div class="muted" id="quiz-note"></div>
+  </div>
+</section>
+
+<section id="tool-pane" hidden>
+  <div class="tool-shell">
+    <div class="tool-head">
+      <h2 id="tool-title">工具</h2>
+      <span class="spacer"></span>
+      <span class="muted"><kbd>Esc</kbd> 关闭</span>
+      <button id="tool-exit" class="ghost">关闭</button>
+    </div>
+    <div id="tool-body"></div>
   </div>
 </section>
 
