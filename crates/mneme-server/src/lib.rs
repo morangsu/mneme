@@ -30,6 +30,7 @@ use mneme_upstream::{
 };
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
+pub mod ocr;
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
@@ -138,6 +139,8 @@ pub fn router(state: AppState) -> Router {
         .route("/review-config", put(api_review_config_put))
         .route("/import", post(api_import))
         .route("/schema/init", post(api_schema_init))
+        .route("/ocr", post(api_ocr))
+        .route("/ocr/info", get(api_ocr_info))
         .route("/export", get(api_export))
         .route("/sync/status", get(api_sync_status))
         .route("/sync/{id}", post(api_sync))
@@ -1447,6 +1450,17 @@ async fn api_schema_init(State(s): State<AppState>, Json(b): Json<SchemaInitBody
         }
         Err(e) => Json(json!({ "error": e.to_string() })),
     }
+}
+
+// ---------------------------------------------------------------- OCR（截图识字）
+
+async fn api_ocr_info(State(s): State<AppState>) -> Json<JsonValue> {
+    Json(ocr::ocr_info(s.store.root()))
+}
+
+async fn api_ocr(State(s): State<AppState>, Json(b): Json<ocr::OcrBody>) -> Json<JsonValue> {
+    let root = s.store.root().to_path_buf();
+    Json(ocr::ocr_run(root, b).await)
 }
 
 async fn api_export(

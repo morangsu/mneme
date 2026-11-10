@@ -41,6 +41,12 @@ mimalloc = { version = "0.1", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 uniffi = { version = "0.29", features = ["cli"] }
+# OCR（RapidOCR/PP-OCRv4 ONNX 模型本地推理）。
+# 必须关掉 ort 默认的 download-binaries：构建期会去 github.com 拉 onnxruntime，
+# 本机网络被阻断；改用 load-dynamic + 运行时指定 onnxruntime.dll（tools/fetch-ocr-models.py 下载）。
+paddle-ocr-rs = { version = "0.6.1", default-features = false }
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic", "ndarray"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp", "gif"] }
 
 # 性能清单 §1：release 全开。dev 保持增量编译速度，不套用这些选项。
 [profile.release]

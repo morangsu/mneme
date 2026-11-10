@@ -478,3 +478,13 @@ body[data-theme="dark"] { color-scheme: dark; }
   white-space: pre-wrap; word-break: break-word;
 }
 .conflict-choices { display: flex; gap: var(--space-s); flex-wrap: wrap; }
+
+/* 截图识字 */
+.ocr-drop {
+  border: 1.5px dashed var(--md-outline-variant); border-radius: var(--shape-s);
+  padding: var(--space-m); text-align: center; cursor: pointer;
+  color: var(--md-on-surface-variant); font-size: var(--type-body-medium-size);
+  margin-bottom: var(--space-s); user-select: none;
+}
+.ocr-drop:hover, .ocr-drop.on { border-color: var(--md-primary); color: var(--md-primary); }
+#t-ocr-out { width: 100%; }

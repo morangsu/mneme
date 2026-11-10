@@ -915,6 +915,7 @@ const T = { active: false, name: '', data: null, arg: '', decisions: {} };
 const TOOL_TITLES = {
   reverse: '反查线索', data: '导入与导出', deleted: '回收站',
   groups: '分组管理', paste: '批量粘贴', upstream: '公共基础库', history: '变更历史',
+  ocr: '截图识字',
 };
 
 function toolBody(html) {
@@ -944,11 +945,12 @@ async function openTool(name, arg = '') {
     else if (name === 'deleted') await renderDeleted();
     else if (name === 'groups') await renderGroups(arg);
     else if (name === 'paste') await renderPaste();
+    else if (name === 'ocr') await renderOcr();
     else if (name === 'upstream') await renderUpstream();
     else if (name === 'history') await renderHistory(arg);
   } catch (e) { toolNote('加载失败：' + e, true); }
 }
-function closeTool() { showToolPane(false); }
+function closeTool() { showToolPane(false); document.removeEventListener('paste', ocrPasteHandler); }
 
 function renderReverse() {
   toolBody(`<div class="tool-card">
@@ -1097,6 +1099,74 @@ async function pasteCreate() {
     `新建 ${(r.created || []).length} 条 / 跳过 ${(r.skipped || []).length} 条 / 失败 ${(r.failed || []).length} 条`);
 }
 
+// ---- 截图识字：本地 PP-OCRv4 推理（/api/ocr），识别结果可送进批量粘贴 ----
+async function renderOcr() {
+  T.data = { ocrReady: null };
+  toolBody(`<div class="tool-card"><h3>截图识字（本地推理，图片不上传）</h3>
+    <div id="t-ocr-drop" class="ocr-drop">选图片，截图后直接 <kbd>Ctrl+V</kbd> 粘贴，或把图片拖到这里</div>
+    <input type="file" id="t-ocr-file" accept="image/*" style="display:none" />
+    <textarea id="t-ocr-out" placeholder="识别结果（可手工修正）" style="min-height:120px"></textarea>
+    <div class="tool-row">
+      <button data-act="ocr-pick" class="ghost">选择图片</button>
+      <button data-act="ocr-run">重新识别</button>
+      <button data-act="ocr-to-paste">送到批量粘贴</button>
+    </div></div>`);
+  const info = await api('/api/ocr/info');
+  T.data.ocrReady = !!info.ready;
+  if (!info.ready) {
+    toolNote('OCR 未就绪：' + (info.error || info.hint || '缺少模型'), true);
+  } else {
+    toolNote('已就绪（模型：' + (info.dir || '?') + '）— 粘贴或选择图片即识别');
+  }
+  $('t-ocr-drop').addEventListener('click', () => $('t-ocr-file').click());
+  $('t-ocr-file').addEventListener('change', () => {
+    const f = $('t-ocr-file').files?.[0];
+    if (f) ocrFile(f);
+  });
+  const drop = $('t-ocr-drop');
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('on'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('on'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault(); drop.classList.remove('on');
+    const f = e.dataTransfer?.files?.[0];
+    if (f && f.type.startsWith('image/')) ocrFile(f);
+  });
+  // Ctrl+V 粘贴截图：识别完自动填充；ocr 关闭时不再响应
+  document.addEventListener('paste', ocrPasteHandler);
+}
+
+function ocrPasteHandler(e) {
+  if (T.active !== true || T.name !== 'ocr') return;
+  const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith('image/'));
+  if (item) { e.preventDefault(); ocrFile(item.getAsFile()); }
+}
+
+async function ocrFile(file) {
+  if (T.data.ocrReady === false) return toolNote('OCR 未就绪：先运行 tools/fetch-ocr-models.py 下载模型', true);
+  T.data.ocrFile = file;
+  const buf = await file.arrayBuffer();
+  let bin = '';
+  const u8 = new Uint8Array(buf);
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+  const b64 = btoa(bin);
+  toolNote('识别中…');
+  const r = await api('/api/ocr', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ b64 }),
+  });
+  if (r.error) return toolNote('错误：' + r.error, true);
+  $('t-ocr-out').value = r.text || '';
+  toolNote(`识别完成（${r.lines?.length || 0} 行，${r.ms ?? '?'} ms）——可手工修正后送批量粘贴`);
+}
+
+async function ocrToPaste() {
+  const text = $('t-ocr-out').value.trim();
+  if (!text) return toolNote('还没有识别结果', true);
+  await openTool('paste');
+  const el = $('t-paste');
+  if (el) el.value = text;
+}
+
 async function renderHistory(id) {
   toolBody(`<div class="tool-card"><h3>${esc(id || '')} 的变更历史</h3><div id="t-list" class="tool-list"></div></div>`);
   if (!id) return toolNote('没有指定实体', true);
@@ -1202,9 +1272,12 @@ $('tool-body').addEventListener('click', async (e) => {
     } else if (act === 'group-assign') {
       const r = await api('/api/group', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: btn.dataset.id, group_id: $('t-g-assign').value }) });
       toolNote(r.error ? '错误：' + r.error : '已更新分组', !!r.error);
-    } else if (act === 'paste-parse') await pasteParse();
+    }     else if (act === 'paste-parse') await pasteParse();
     else if (act === 'paste-dup') await pasteDup();
     else if (act === 'paste-create') await pasteCreate();
+    else if (act === 'ocr-pick') $('t-ocr-file')?.click();
+    else if (act === 'ocr-run') T.data?.ocrFile ? ocrFile(T.data.ocrFile) : toolNote('先选图或粘贴截图', true);
+    else if (act === 'ocr-to-paste') await ocrToPaste();
     else if (act === 'up-pull') await upPull();
     else if (act === 'up-suggest') {
       (T.data?.conflicts || []).forEach((c) => markDecision(c.id, String(c.suggestion || 'KeepMine')));
